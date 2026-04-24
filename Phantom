@@ -35,82 +35,45 @@ _G.PhantomConfig = {
 
 S.whitelist = {}
 -- ================================================================
--- ESP SYSTEM
--- Source: Phantom_wtf.lua corner-box structure
--- Upgrades applied:
---   • Proper 3D→2D scaling: use actual Head + foot parts, not HRP offset
---   • min/max topY/bottomY so box never flips at any distance
---   • onScreen boolean from WorldToViewportPoint for reliable visibility
---   • centerX computed from head+foot screen X for accuracy
---   • Viewport-relative off-screen cull with generous margin
---   • Hide-once on disable (S._espPrev flag)
---   • task.defer for safe initial population
---   • Configurable box color applied at creation + via S.updateESPColor
+-- ESP SYSTEM — FIXED & STABLE
+-- Uses WorldToViewportPoint onScreen boolean (Majesty backend)
+-- + Phantom corner-box visual style
 -- ================================================================
 do
     S.ESP_ENABLED   = false
     S.ESP_SKELETON  = false
-    S.ESP_MAX_DIST  = 2000
+    S.ESP_MAX_DIST  = 500
     S.ESP_BOX_COLOR = Color3.fromRGB(0, 255, 255)
     S._espPrev      = false
 
     local ESP_OBJ = {}
-
-    -- BONES: R15 names with R6 fallback
     local BONES = {
         {"Head","UpperTorso"}, {"UpperTorso","LowerTorso"},
         {"UpperTorso","LeftHand"}, {"UpperTorso","RightHand"},
         {"LowerTorso","LeftFoot"}, {"LowerTorso","RightFoot"},
     }
-    local R6_FALLBACK = {
-        UpperTorso="Torso",  LowerTorso="Torso",
-        LeftHand="Left Arm", RightHand="Right Arm",
-        LeftFoot="Left Leg", RightFoot="Right Leg",
-    }
 
-    -- Fast direct-child lookup
-    local function getPart(char, name)
-        for _, child in ipairs(char:GetChildren()) do
-            if child:IsA("BasePart") and child.Name == name then return child end
-        end
-        return nil
-    end
-    local function getPartFB(char, name)
-        local p = getPart(char, name); if p then return p end
-        local fb = R6_FALLBACK[name]
-        return fb and getPart(char, fb)
-    end
-
-    -- Hide all drawings for one player entry
     local function hideESP(d)
         if not d then return end
-        for _, cname in ipairs({"CornerTL","CornerTR","CornerBL","CornerBR"}) do
-            local c = d[cname]
-            if c then
-                if c.h then c.h.Visible=false end
-                if c.v then c.v.Visible=false end
-            end
+        for i = 1, 4 do
+            if d[i] then d[i][1].Visible=false; d[i][2].Visible=false end
         end
         if d.Name   then d.Name.Visible   = false end
         if d.Dist   then d.Dist.Visible   = false end
         if d.Item   then d.Item.Visible   = false end
         if d.HPBg   then d.HPBg.Visible   = false end
         if d.HPFill then d.HPFill.Visible = false end
-        if d.Bones  then for _, b in ipairs(d.Bones) do if b then b.Visible=false end end end
+        if d.Bones  then for i=1,#d.Bones do d.Bones[i].Visible=false end end
         d._vis = false
     end
 
-    -- Remove all drawings for a player and free memory
     local function removeESP(plr)
         local d = ESP_OBJ[plr]; if not d then return end
-        -- Disconnect CharacterAdded listener to prevent memory leak
-        pcall(function() if d._charConn then d._charConn:Disconnect() end end)
         pcall(function()
-            for _, cname in ipairs({"CornerTL","CornerTR","CornerBL","CornerBR"}) do
-                local c = d[cname]
-                if c then
-                    if c.h then c.h:Remove() end
-                    if c.v then c.v:Remove() end
+            for i=1,4 do
+                if d[i] then
+                    if d[i][1] then d[i][1]:Remove() end
+                    if d[i][2] then d[i][2]:Remove() end
                 end
             end
             if d.Name   then d.Name:Remove()   end
@@ -118,32 +81,20 @@ do
             if d.Item   then d.Item:Remove()   end
             if d.HPBg   then d.HPBg:Remove()   end
             if d.HPFill then d.HPFill:Remove() end
-            if d.Bones  then for _, b in ipairs(d.Bones) do if b then b:Remove() end end end
+            if d.Bones  then for i=1,#d.Bones do if d.Bones[i] then d.Bones[i]:Remove() end end end
         end)
         ESP_OBJ[plr] = nil
     end
 
-    -- Create all drawings for one player
     local function createESP(plr)
         if plr == LocalPlayer then return end
         if ESP_OBJ[plr] then return end
         local d = {}
-
-        -- Corner-box: 4 named corners, each with h+v line
-        local function mkLine(col)
-            local l = Drawing.new("Line")
-            l.Visible=false; l.Color=col; l.Thickness=1.5
-            return l
+        for _ = 1, 4 do
+            local h = Drawing.new("Line"); h.Visible=false; h.Color=S.ESP_BOX_COLOR; h.Thickness=1.5
+            local v = Drawing.new("Line"); v.Visible=false; v.Color=S.ESP_BOX_COLOR; v.Thickness=1.5
+            d[#d+1] = {h, v}
         end
-        local function mkCorner()
-            return { h=mkLine(S.ESP_BOX_COLOR), v=mkLine(S.ESP_BOX_COLOR) }
-        end
-        d.CornerTL = mkCorner()
-        d.CornerTR = mkCorner()
-        d.CornerBL = mkCorner()
-        d.CornerBR = mkCorner()
-
-        -- Text labels
         local function mkTxt(sz, col)
             local t = Drawing.new("Text")
             t.Visible=false; t.Center=true; t.Outline=true
@@ -153,93 +104,57 @@ do
         d.Name   = mkTxt(13, Color3.new(1,1,1))
         d.Dist   = mkTxt(11, Color3.fromRGB(200,200,200))
         d.Item   = mkTxt(11, Color3.fromRGB(255,220,50))
-
-        -- HP bar
-        d.HPBg   = Drawing.new("Square")
-        d.HPBg.Visible=false; d.HPBg.Color=Color3.fromRGB(20,20,20); d.HPBg.Filled=true; d.HPBg.Thickness=1
-        d.HPFill = Drawing.new("Square")
-        d.HPFill.Visible=false; d.HPFill.Filled=true; d.HPFill.Thickness=1
-
-        -- Skeleton
-        d.Bones = {}
+        d.HPBg   = Drawing.new("Square"); d.HPBg.Visible=false; d.HPBg.Color=Color3.fromRGB(20,20,20); d.HPBg.Filled=true; d.HPBg.Thickness=1
+        d.HPFill = Drawing.new("Square"); d.HPFill.Visible=false; d.HPFill.Filled=true; d.HPFill.Thickness=1
+        d.Bones  = {}
         for _ = 1, #BONES do
-            local l = Drawing.new("Line")
-            l.Visible=false; l.Color=Color3.new(1,1,1); l.Thickness=1
-            table.insert(d.Bones, l)
+            local l = Drawing.new("Line"); l.Visible=false; l.Color=Color3.new(1,1,1); l.Thickness=1
+            d.Bones[#d.Bones+1] = l
         end
-
-        -- Per-player cache
-        d._char = nil; d._hum = nil; d._hrp = nil; d._vis = false; d._charConn = nil
+        d._char=nil; d._hum=nil; d._hrp=nil; d._vis=false
         ESP_OBJ[plr] = d
-
-        -- FIX: Reset character cache immediately when player respawns.
-        -- Without this, d._char stays pointing at the old (dead) character
-        -- for one or more frames, which causes double-render on respawn.
-        d._charConn = plr.CharacterAdded:Connect(function()
-            local entry = ESP_OBJ[plr]
-            if entry then
-                entry._char = nil
-                entry._hum  = nil
-                entry._hrp  = nil
-                if entry._vis then hideESP(entry) end
-                entry._vis = false
-            end
-        end)
     end
 
-    -- Draw a single corner (Phantom_wtf corner naming scheme)
-    local function drawCorner(corner, x, y, w, h, dir)
-        local cLen = math.min(w, h) * 0.25
-        local hL, vL = corner.h, corner.v
-        if dir == "TL" then
-            hL.From=Vector2.new(x,    y);     hL.To=Vector2.new(x+cLen, y)
-            vL.From=Vector2.new(x,    y);     vL.To=Vector2.new(x,      y+cLen)
-        elseif dir == "TR" then
-            hL.From=Vector2.new(x+w,  y);     hL.To=Vector2.new(x+w-cLen, y)
-            vL.From=Vector2.new(x+w,  y);     vL.To=Vector2.new(x+w,      y+cLen)
-        elseif dir == "BL" then
-            hL.From=Vector2.new(x,    y+h);   hL.To=Vector2.new(x+cLen, y+h)
-            vL.From=Vector2.new(x,    y+h);   vL.To=Vector2.new(x,      y+h-cLen)
-        elseif dir == "BR" then
-            hL.From=Vector2.new(x+w,  y+h);   hL.To=Vector2.new(x+w-cLen, y+h)
-            vL.From=Vector2.new(x+w,  y+h);   vL.To=Vector2.new(x+w,      y+h-cLen)
+    -- FIX: Fast direct-child BasePart lookup (no FindFirstChild overhead)
+    local function getPart(char, name)
+        for _, child in ipairs(char:GetChildren()) do
+            if child:IsA("BasePart") and child.Name == name then return child end
         end
-        hL.Visible=true; vL.Visible=true
+        return nil
     end
 
-    -- Per-frame update for one player
+    -- R6 body fallback
+    local R6FB = {
+        UpperTorso="Torso", LowerTorso="Torso",
+        LeftHand="Left Arm", RightHand="Right Arm",
+        LeftFoot="Left Leg", RightFoot="Right Leg",
+    }
+    local function getPartFB(char, name)
+        local p = getPart(char, name)
+        if p then return p end
+        local fb = R6FB[name]
+        return fb and getPart(char, fb)
+    end
+
+    -- FIX: Improved ESP update — stable, no flicker, handles all edge cases
     local function updateESP(plr, cam, myHRP)
         local d = ESP_OBJ[plr]; if not d then return end
 
-        -- FIX: Guard against LocalPlayer sneaking in via race condition
-        if plr == LocalPlayer then removeESP(plr); return end
-
+        -- Validate character, re-cache if changed
         local char = plr.Character
         if not char or not char.Parent then
             if d._vis then hideESP(d) end; return
         end
-
-        -- FIX: Critical double-character guard.
-        -- Verify this character truly belongs to this player RIGHT NOW.
-        -- During respawn transitions, plr.Character can briefly reference an
-        -- old or mismatched model, causing two boxes to appear simultaneously.
-        if Players:GetPlayerFromCharacter(char) ~= plr then
-            if d._vis then hideESP(d) end; return
-        end
-
-        -- Cache per-character references; refresh on character change
         if d._char ~= char then
-            -- FIX: Hide immediately when char changes so no stale box flashes
-            -- for even one frame with old position data
-            if d._vis then hideESP(d) end
             d._char = char
             d._hum  = char:FindFirstChildOfClass("Humanoid")
             d._hrp  = getPart(char, "HumanoidRootPart")
-            d._vis  = false
         end
         local hum = d._hum; local hrp = d._hrp
-        if not hum or not hum.Parent then d._hum=char:FindFirstChildOfClass("Humanoid"); hum=d._hum end
-        if not hrp or not hrp.Parent then d._hrp=getPart(char,"HumanoidRootPart"); hrp=d._hrp end
+
+        -- Re-validate cached refs (respawn safety)
+        if not hum or not hum.Parent then d._hum = char:FindFirstChildOfClass("Humanoid"); hum = d._hum end
+        if not hrp or not hrp.Parent then d._hrp = getPart(char, "HumanoidRootPart"); hrp = d._hrp end
 
         if not hum or hum.Health <= 0 or not hrp then
             if d._vis then hideESP(d) end; return
@@ -248,144 +163,125 @@ do
             if d._vis then hideESP(d) end; return
         end
 
-        -- Distance check (live variable, no stale copy)
+        -- Distance check
         local dist3D = (hrp.Position - myHRP.Position).Magnitude
         if S.ESP_MAX_DIST > 0 and dist3D > S.ESP_MAX_DIST then
             if d._vis then hideESP(d) end; return
         end
 
-        -- ── SCALING FIX ──
-        -- Use actual Head part top + foot part bottom for accurate screen height.
-        -- This eliminates the "far-away distortion" because we project real world
-        -- points instead of estimating offsets from HRP.
-        local headPart = getPart(char, "Head")
-        local footPart = getPart(char, "LeftFoot") or getPart(char, "RightFoot")
-                      or getPart(char, "Left Leg") or getPart(char, "Right Leg")
-
-        local headPos = headPart and (headPart.Position + Vector3.new(0, 0.5, 0))
-                     or (hrp.Position + Vector3.new(0, 3.0, 0))
-        local footPos = footPart and (footPart.Position - Vector3.new(0, 0.15, 0))
-                     or (hrp.Position - Vector3.new(0, 3.0, 0))
-
-        local headSP, headOn = cam:WorldToViewportPoint(headPos)
-        local footSP, footOn = cam:WorldToViewportPoint(footPos)
-
-        -- Need at least one point on screen
-        if not (headOn or footOn) then
+        -- FIX: Use head for accurate top position
+        local head = getPart(char, "Head")
+        if not head then
             if d._vis then hideESP(d) end; return
         end
 
-        -- Stable top/bottom: min/max prevents box flip when camera tilts
-        local topY    = math.min(headSP.Y, footSP.Y)
-        local bottomY = math.max(headSP.Y, footSP.Y)
+        local headPos = head.Position + Vector3.new(0, 0.5, 0)
+        local rootPos = hrp.Position  - Vector3.new(0, 3,   0)
+
+        -- FIX: WorldToViewportPoint returns (Vector3, onScreen bool)
+        -- Using onScreen boolean instead of Z-check — more reliable near FOV edges
+        local headSP, headOnScreen = cam:WorldToViewportPoint(headPos)
+        local rootSP, rootOnScreen = cam:WorldToViewportPoint(rootPos)
+
+        -- FIX: Show if EITHER point is on screen (handles player at edge / near camera)
+        if not headOnScreen and not rootOnScreen then
+            if d._vis then hideESP(d) end; return
+        end
+
+        -- FIX: Use min/max Y for stable box (no flip when camera tilts)
+        local topY    = math.min(headSP.Y, rootSP.Y)
+        local bottomY = math.max(headSP.Y, rootSP.Y)
         local h       = bottomY - topY
+
+        -- FIX: 4px minimum (not 6) to keep distant players visible
         if h < 4 then
             if d._vis then hideESP(d) end; return
         end
+        -- FIX: Remove maximum height cap — let box scale naturally with distance
+        -- (old h > 500 cap was hiding close players)
 
-        -- Center X from both projected points for accurate horizontal position
-        local centerX = (headSP.X + footSP.X) * 0.5
+        local centerX = (headSP.X + rootSP.X) * 0.5
         local w       = h * 0.60
         local bx      = centerX - w * 0.5
         local by      = topY
 
-        -- Viewport-relative off-screen cull (generous margin keeps nearby players visible)
+        -- FIX: Large viewport margin (300px) to prevent edge-culling nearby players
         local vs = cam.ViewportSize
         if bx+w < -300 or bx > vs.X+300 or by+h < -300 or by > vs.Y+300 then
             if d._vis then hideESP(d) end; return
         end
 
-        -- Team color override
-        local col = plr.Team and plr.Team.TeamColor.Color or S.ESP_BOX_COLOR
+        -- Phantom corner-box rendering
+        local col  = plr.Team and plr.Team.TeamColor.Color or S.ESP_BOX_COLOR
+        local cLen = math.min(w, h) * 0.25
 
-        -- Apply color to corners and draw
-        for _, cname in ipairs({"CornerTL","CornerTR","CornerBL","CornerBR"}) do
-            local c = d[cname]
-            if c then c.h.Color=col; c.v.Color=col end
-        end
-        drawCorner(d.CornerTL, bx, by, w, h, "TL")
-        drawCorner(d.CornerTR, bx, by, w, h, "TR")
-        drawCorner(d.CornerBL, bx, by, w, h, "BL")
-        drawCorner(d.CornerBR, bx, by, w, h, "BR")
+        d[1][1].From=Vector2.new(bx,   by);   d[1][1].To=Vector2.new(bx+cLen,by);    d[1][1].Color=col; d[1][1].Visible=true
+        d[1][2].From=Vector2.new(bx,   by);   d[1][2].To=Vector2.new(bx,by+cLen);    d[1][2].Color=col; d[1][2].Visible=true
+        d[2][1].From=Vector2.new(bx+w, by);   d[2][1].To=Vector2.new(bx+w-cLen,by);  d[2][1].Color=col; d[2][1].Visible=true
+        d[2][2].From=Vector2.new(bx+w, by);   d[2][2].To=Vector2.new(bx+w,by+cLen);  d[2][2].Color=col; d[2][2].Visible=true
+        d[3][1].From=Vector2.new(bx,   by+h); d[3][1].To=Vector2.new(bx+cLen,by+h);  d[3][1].Color=col; d[3][1].Visible=true
+        d[3][2].From=Vector2.new(bx,   by+h); d[3][2].To=Vector2.new(bx,by+h-cLen);  d[3][2].Color=col; d[3][2].Visible=true
+        d[4][1].From=Vector2.new(bx+w, by+h); d[4][1].To=Vector2.new(bx+w-cLen,by+h);d[4][1].Color=col; d[4][1].Visible=true
+        d[4][2].From=Vector2.new(bx+w, by+h); d[4][2].To=Vector2.new(bx+w,by+h-cLen);d[4][2].Color=col; d[4][2].Visible=true
 
-        -- Name (above box)
-        d.Name.Text     = plr.Name
-        d.Name.Position = Vector2.new(centerX, by - 16)
-        d.Name.Visible  = true
+        -- Name + distance labels
+        d.Name.Text=plr.Name; d.Name.Position=Vector2.new(centerX, by-16); d.Name.Visible=true
+        d.Dist.Text=string.format("[%.0fm]", dist3D); d.Dist.Position=Vector2.new(centerX, by+h+4); d.Dist.Visible=true
 
-        -- Distance (below box)
-        d.Dist.Text     = string.format("[%.0fm]", dist3D)
-        d.Dist.Position = Vector2.new(centerX, by + h + 4)
-        d.Dist.Visible  = true
-
-        -- Held tool (below distance)
+        -- Tool/item label
         local toolName = nil
         for _, obj in ipairs(char:GetChildren()) do
-            if obj:IsA("Tool") then toolName = obj.Name; break end
+            if obj:IsA("Tool") then toolName=obj.Name; break end
         end
         if toolName then
-            d.Item.Text     = "[" .. toolName .. "]"
-            d.Item.Position = Vector2.new(centerX, by + h + 16)
-            d.Item.Visible  = true
+            d.Item.Text="["..toolName.."]"; d.Item.Position=Vector2.new(centerX, by+h+16); d.Item.Visible=true
         else
-            if d.Item.Visible then d.Item.Visible = false end
+            if d.Item.Visible then d.Item.Visible=false end
         end
 
-        -- HP bar (left of box, vertical)
-        local hpR  = math.clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1)
-        local hpH  = math.max(2, h * hpR)
-        local hpX  = bx - 5
-        d.HPBg.Size     = Vector2.new(2, h)
-        d.HPBg.Position = Vector2.new(hpX, by)
-        d.HPBg.Visible  = true
-        d.HPFill.Size     = Vector2.new(2, hpH)
-        d.HPFill.Position = Vector2.new(hpX, by + h - hpH)
-        d.HPFill.Color    = hpR > 0.6 and Color3.fromRGB(0,255,80)
-                         or hpR > 0.3 and Color3.fromRGB(255,200,0)
-                         or                Color3.fromRGB(255,50,50)
-        d.HPFill.Visible = true
+        -- HP bar
+        local r   = math.clamp(hum.Health / math.max(hum.MaxHealth,1), 0, 1)
+        local hh  = math.max(2, h * r)
+        local hpX = bx - 5
+        d.HPBg.Size=Vector2.new(2,h); d.HPBg.Position=Vector2.new(hpX,by); d.HPBg.Visible=true
+        d.HPFill.Size=Vector2.new(2,hh); d.HPFill.Position=Vector2.new(hpX,by+h-hh)
+        d.HPFill.Color = r>0.6 and Color3.fromRGB(0,255,80) or r>0.3 and Color3.fromRGB(255,200,0) or Color3.fromRGB(255,50,50)
+        d.HPFill.Visible=true
 
         -- Skeleton
         if S.ESP_SKELETON then
-            for i = 1, #BONES do
-                local bone = d.Bones[i]
-                local p1   = getPartFB(char, BONES[i][1])
-                local p2   = getPartFB(char, BONES[i][2])
+            for i=1,#BONES do
+                local b  = d.Bones[i]
+                local p1 = getPartFB(char, BONES[i][1])
+                local p2 = getPartFB(char, BONES[i][2])
                 if p1 and p2 then
-                    local s1, vis1 = cam:WorldToViewportPoint(p1.Position)
-                    local s2, vis2 = cam:WorldToViewportPoint(p2.Position)
-                    if vis1 and vis2 then
-                        bone.From    = Vector2.new(s1.X, s1.Y)
-                        bone.To      = Vector2.new(s2.X, s2.Y)
-                        bone.Color   = Color3.new(1, 1, 1)
-                        bone.Visible = true
+                    local s1, v1 = cam:WorldToViewportPoint(p1.Position)
+                    local s2, v2 = cam:WorldToViewportPoint(p2.Position)
+                    if v1 and v2 then
+                        b.From=Vector2.new(s1.X,s1.Y); b.To=Vector2.new(s2.X,s2.Y); b.Visible=true
                     else
-                        if bone.Visible then bone.Visible = false end
+                        if b.Visible then b.Visible=false end
                     end
                 else
-                    if bone.Visible then bone.Visible = false end
+                    if b.Visible then b.Visible=false end
                 end
             end
         else
-            for i = 1, #d.Bones do
-                if d.Bones[i].Visible then d.Bones[i].Visible = false end
-            end
+            for i=1,#d.Bones do if d.Bones[i].Visible then d.Bones[i].Visible=false end end
         end
-
         d._vis = true
     end
 
-    -- Update box color on all existing drawings (called by colorpicker)
+    -- Color update helper for colorpicker
     S.updateESPColor = function(col)
         for _, d in pairs(ESP_OBJ) do
-            for _, cname in ipairs({"CornerTL","CornerTR","CornerBL","CornerBR"}) do
-                local c = d[cname]
-                if c then c.h.Color=col; c.v.Color=col end
+            for i=1,4 do
+                if d[i] then d[i][1].Color=col; d[i][2].Color=col end
             end
         end
     end
 
-    -- RenderStepped at 30 fps cap; hide-once when disabled
+    -- FIX: RenderStepped at 30fps cap, hide-once on disable (no per-frame hide spam)
     local _ea = 0
     RunService.RenderStepped:Connect(function(dt)
         _ea = _ea + dt
@@ -402,26 +298,32 @@ do
         local cam   = workspace.CurrentCamera
         local myHRP = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
         if not myHRP then return end
-        for plr in pairs(ESP_OBJ) do
-            pcall(updateESP, plr, cam, myHRP)
-        end
+        for plr in pairs(ESP_OBJ) do pcall(updateESP, plr, cam, myHRP) end
     end)
 
-    -- task.defer: safer than immediate create (character may not be ready)
+    -- FIX: task.defer for safe initial population; re-create on respawn
     for _, plr in pairs(Players:GetPlayers()) do task.defer(createESP, plr) end
-    Players.PlayerAdded:Connect(function(plr) task.defer(createESP, plr) end)
+    Players.PlayerAdded:Connect(function(plr)
+        task.defer(createESP, plr)
+        -- FIX: re-create ESP when character respawns
+        plr.CharacterAdded:Connect(function()
+            task.wait(0.5)
+            removeESP(plr)
+            task.defer(createESP, plr)
+        end)
+    end)
     Players.PlayerRemoving:Connect(removeESP)
 end
 
 -- ================================================================
--- VEHICLE FLY (E = UP, Q = DOWN — cached parts system)
+-- VEHICLE FLY — E = UP, Q = DOWN (cached parts for performance)
 -- ================================================================
 do
     S.vFlyOn  = false
     S.vFlySpd = 60
-    local conn = nil
-    local vUp  = false
-    local vDn  = false
+    local conn     = nil
+    local vUp      = false
+    local vDn      = false
 
     UserInputService.InputBegan:Connect(function(inp, gpe)
         if not S.vFlyOn or gpe then return end
@@ -445,10 +347,8 @@ do
             if mdl ~= lastModel then
                 lastModel   = mdl
                 vPartsCache = {}
-                if mdl then
-                    for _, p in pairs(mdl:GetDescendants()) do
-                        if p:IsA("BasePart") then table.insert(vPartsCache, p) end
-                    end
+                for _, p in pairs(mdl:GetDescendants()) do
+                    if p:IsA("BasePart") then table.insert(vPartsCache, p) end
                 end
             end
             local root = mdl.PrimaryPart or seat
@@ -457,7 +357,7 @@ do
             if fwd.Magnitude>0.01 then fwd=fwd.Unit else fwd=Vector3.new(0,0,-1) end
             local rgt  = Vector3.new(cf.RightVector.X,0,cf.RightVector.Z)
             if rgt.Magnitude>0.01 then rgt=rgt.Unit else rgt=Vector3.new(1,0,0) end
-            local mv   = Vector3.zero
+            local mv = Vector3.zero
             if UserInputService:IsKeyDown(Enum.KeyCode.W) then mv=mv+fwd end
             if UserInputService:IsKeyDown(Enum.KeyCode.S) then mv=mv-fwd end
             if UserInputService:IsKeyDown(Enum.KeyCode.A) then mv=mv-rgt end
@@ -470,8 +370,8 @@ do
             end
             if mv.Magnitude > 0 then
                 mv = mv.Unit
-                local np  = root.Position + mv * S.vFlySpd * dt
-                local ld  = Vector3.new(cf.LookVector.X,0,cf.LookVector.Z)
+                local np = root.Position + mv * S.vFlySpd * dt
+                local ld = Vector3.new(cf.LookVector.X,0,cf.LookVector.Z)
                 if ld.Magnitude>0.01 then ld=ld.Unit else ld=fwd end
                 pcall(function()
                     local cp  = mdl:GetPivot()
@@ -493,7 +393,7 @@ do
 end
 
 -- ================================================================
--- AIMBOT
+-- AIMBOT — with Majesty-style dynamic keybind system
 -- ================================================================
 do
     S.aimOn       = false
@@ -506,24 +406,15 @@ do
     S.aimPriority = "Crosshair"
     S.aimMaxDist  = 500
     S.aimFovCol   = Color3.fromRGB(0, 196, 255)
-    S.aimKey      = _G.PhantomConfig.DefaultAimKey
-    S.aimRC       = false
-    S.aimLC       = false
+
+    -- Dynamic keybind state (Majesty system — supports KeyCode + mouse buttons)
+    S.aimKBType   = "KeyCode"
+    S.aimKBCode   = _G.PhantomConfig.DefaultAimKey
+    S.aimKBMBtn   = nil
+    S.aimKBLabel  = _G.PhantomConfig.DefaultAimKey and _G.PhantomConfig.DefaultAimKey.Name or "E"
     S.aimKBMode   = "Hold"
     S.aimToggle   = false
     S.aimCapturing= false
-
-    -- Keybind state (supports KB, MB1, MB2, MB3, MB4, MB5)
-    S.aimKBType  = "KeyCode"
-    S.aimKBCode  = _G.PhantomConfig.DefaultAimKey
-    S.aimKBMBtn  = nil
-    S.aimKBLabel = _G.PhantomConfig.DefaultAimKey and _G.PhantomConfig.DefaultAimKey.Name or "E"
-
-    -- GUI hide/show keybind
-    S.hideKBType = "KeyCode"
-    S.hideKBCode = Enum.KeyCode.F1
-    S.hideKBMBtn = nil
-    S.isHidden   = false
 
     local mb4Held = false
     local mb5Held = false
@@ -541,12 +432,12 @@ do
         if kn=="MouseButton5" or un=="MouseButton5" then mb5Held=false end
     end)
 
+    -- Dynamic display string for current aim key
     local function getAimDisplay()
         if S.aimKBType=="MouseButton" then
             local un = tostring(S.aimKBMBtn or ""):gsub("Enum%.UserInputType%.","")
-            if un=="MouseButton1" then return "MB1"
-            elseif un=="MouseButton2" then return "MB2"
-            elseif un=="MouseButton3" then return "MB3"
+            if un=="MouseButton2" then return "RMB"
+            elseif un=="MouseButton3" then return "MMB"
             end
         elseif S.aimKBType=="MB4" then return "MB4"
         elseif S.aimKBType=="MB5" then return "MB5"
@@ -555,7 +446,7 @@ do
     end
     S.aimGetDisplay = getAimDisplay
 
-    local velCache  = {}
+    local velCache = {}
     local aimCircle = Drawing.new("Circle")
     aimCircle.Thickness=1.5; aimCircle.Filled=false; aimCircle.Transparency=0.75
     aimCircle.NumSides=64; aimCircle.Color=S.aimFovCol; aimCircle.Visible=false
@@ -578,51 +469,50 @@ do
         local cx = S.aimMode=="FreeAim" and mp.X or vs.X*0.5
         local cy = S.aimMode=="FreeAim" and mp.Y or vs.Y*0.5
         local bestS=math.huge; local bestP=nil; local bestPlr=nil
-        local myHRP=LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-        for _,plr in pairs(Players:GetPlayers()) do
+        local myHRP = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        for _, plr in pairs(Players:GetPlayers()) do
             if plr==LocalPlayer or S.whitelist[plr.Name] then continue end
             local char=plr.Character; if not char or not char.Parent then continue end
             local hum=char:FindFirstChildOfClass("Humanoid")
             local part=char:FindFirstChild(S.aimPart) or char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
             if not part or not part.Parent or not hum or hum.Health<=0 then continue end
             if myHRP and S.aimMaxDist>0 and (part.Position-myHRP.Position).Magnitude>S.aimMaxDist then continue end
-            local sp=Camera:WorldToViewportPoint(part.Position); if sp.Z<=0 then continue end
+            local sp, onSc = Camera:WorldToViewportPoint(part.Position); if not onSc then continue end
             local dx=sp.X-cx; local dy=sp.Y-cy
             local dSqr=dx*dx+dy*dy
-            if dSqr>S.aimFOV*S.aimFOV then continue end
-            local score=S.aimPriority=="Distance" and myHRP and (part.Position-myHRP.Position).Magnitude or math.sqrt(dSqr)
-            if score<bestS then bestS=score; bestP=part; bestPlr=plr end
+            if dSqr > S.aimFOV*S.aimFOV then continue end
+            local score = S.aimPriority=="Distance" and myHRP and (part.Position-myHRP.Position).Magnitude or math.sqrt(dSqr)
+            if score < bestS then bestS=score; bestP=part; bestPlr=plr end
         end
         return bestP, bestPlr
     end
 
+    -- FIX: Dynamic isAimHeld — reads live S.aimKBType/S.aimKBCode/S.aimKBMBtn
     local function isAimHeld()
         if S.aimCapturing then return false end
         if S.aimKBMode=="Toggle" then return S.aimToggle end
         if S.aimKBType=="MouseButton" then
-            if S.aimKBMBtn==Enum.UserInputType.MouseButton1 then return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) end
             if S.aimKBMBtn==Enum.UserInputType.MouseButton2 then return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) end
             if S.aimKBMBtn==Enum.UserInputType.MouseButton3 then return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton3) end
         elseif S.aimKBType=="MB4" then return mb4Held
         elseif S.aimKBType=="MB5" then return mb5Held
-        elseif S.aimKBType=="KeyCode" and S.aimKBCode then return UserInputService:IsKeyDown(S.aimKBCode)
-        end
+        elseif S.aimKBType=="KeyCode" and S.aimKBCode then return UserInputService:IsKeyDown(S.aimKBCode) end
         return false
     end
 
+    -- Toggle mode handler
     UserInputService.InputBegan:Connect(function(input, gpe)
         if gpe or S.aimCapturing then return end
         if S.aimOn and S.aimKBMode=="Toggle" then
             local trig = false
             if S.aimKBType=="MouseButton" then
-                if S.aimKBMBtn==Enum.UserInputType.MouseButton1 and input.UserInputType==Enum.UserInputType.MouseButton1 then trig=true end
                 if S.aimKBMBtn==Enum.UserInputType.MouseButton2 and input.UserInputType==Enum.UserInputType.MouseButton2 then trig=true end
                 if S.aimKBMBtn==Enum.UserInputType.MouseButton3 and input.UserInputType==Enum.UserInputType.MouseButton3 then trig=true end
             elseif S.aimKBType=="MB4" and mb4Held then trig=true
             elseif S.aimKBType=="MB5" and mb5Held then trig=true
             elseif S.aimKBType=="KeyCode" and S.aimKBCode and input.KeyCode==S.aimKBCode then trig=true
             end
-            if trig then S.aimToggle = not S.aimToggle end
+            if trig then S.aimToggle=not S.aimToggle end
         end
     end)
 
@@ -632,7 +522,7 @@ do
         else local mmp=UserInputService:GetMouseLocation(); pcall(function() VIM:SendMouseMoveEvent(mmp.X+dx,mmp.Y+dy,false) end) end
     end
 
-    local _fpX,_fpY,_fRC = 0,0,250
+    local _fpX,_fpY,_fRC=0,0,250
     RunService:BindToRenderStep("PhantomAimbot", 201, function(dt)
         local vs = Camera.ViewportSize
         local mp = UserInputService:GetMouseLocation()
@@ -642,31 +532,30 @@ do
         local fL = math.clamp(dt*40,0,1)
         _fpX=_fpX+(tcX-_fpX)*fL; _fpY=_fpY+(tcY-_fpY)*fL; _fRC=_fRC+(S.aimFOV-_fRC)*fL
         if aimCircle then
-            aimCircle.Position = Vector2.new(_fpX,_fpY)
-            aimCircle.Radius   = _fRC
-            aimCircle.Color    = S.aimFovCol
-            aimCircle.Visible  = S.aimOn
+            aimCircle.Position=Vector2.new(_fpX,_fpY)
+            aimCircle.Radius=_fRC
+            aimCircle.Color=S.aimFovCol
+            aimCircle.Visible=S.aimOn
         end
         if not S.aimOn or not isAimHeld() then return end
-        local target,tPlr = getBest(); if not target then return end
-        local pos = getPredPos(target, tPlr)
+        local target,tPlr=getBest(); if not target then return end
+        local pos=getPredPos(target,tPlr)
         if S.aimMode=="Camera" then
-            local cf   = Camera.CFrame
-            local goal = CFrame.new(cf.Position, pos)
+            local cf=Camera.CFrame; local goal=CFrame.new(cf.Position,pos)
             if S.aimSmooth<=0 then Camera.CFrame=goal
             else
-                local f = math.clamp(1-S.aimSmooth/20, 0.05, 0.95)
-                local t = math.clamp(1-(1-f)^(dt/0.016), 0.02, 1)
-                Camera.CFrame = cf:Lerp(goal, t)
+                local f=math.clamp(1-S.aimSmooth/20,0.05,0.95)
+                local t=math.clamp(1-(1-f)^(dt/0.016),0.02,1)
+                Camera.CFrame=cf:Lerp(goal,t)
             end
         else
-            local sp = Camera:WorldToViewportPoint(pos); if sp.Z<=0 then return end
+            local sp,onSc=Camera:WorldToViewportPoint(pos); if not onSc then return end
             local mmp=UserInputService:GetMouseLocation(); local dx=sp.X-mmp.X; local dy=sp.Y-mmp.Y
             if S.aimSmooth<=0 then moveRel(dx,dy)
             else
-                local f = math.clamp(1-S.aimSmooth/20, 0.05, 0.95)
-                local t = math.clamp(1-(1-f)^(dt/0.016), 0.02, 1)
-                moveRel(dx*t, dy*t)
+                local f=math.clamp(1-S.aimSmooth/20,0.05,0.95)
+                local t=math.clamp(1-(1-f)^(dt/0.016),0.02,1)
+                moveRel(dx*t,dy*t)
             end
         end
     end)
@@ -703,10 +592,12 @@ do
         SELL_RADIUS=10
     }
     S.CFG = CFG
+
     local patRemotes      = game:GetService("ReplicatedStorage"):WaitForChild("RemoteEvents", 10)
     local storePurchaseRE = patRemotes and patRemotes:WaitForChild("StorePurchase", 10)
     local rpcRE           = patRemotes and patRemotes:WaitForChild("RPC", 10)
     S.storePurchaseRE     = storePurchaseRE
+
     local BUY_ITEMS = {
         {name="Gelatin",         display="Gelatin"},
         {name="Sugar Block Bag", display="Sugar Block Bag"},
@@ -714,12 +605,12 @@ do
     }
 
     local function countItem(name)
-        local n=0
-        local bpC=LocalPlayer.Backpack:GetChildren()
+        local n = 0
+        local bpC = LocalPlayer.Backpack:GetChildren()
         for i=1,#bpC do if bpC[i].Name==name then n=n+1 end end
-        local ch=LocalPlayer.Character
+        local ch = LocalPlayer.Character
         if ch then
-            local chC=ch:GetChildren()
+            local chC = ch:GetChildren()
             for i=1,#chC do local c=chC[i]; if c:IsA("Tool") and c.Name==name then n=n+1 end end
         end
         return n
@@ -753,11 +644,12 @@ do
 
     local function firePromptNearby(radius)
         local ch=LocalPlayer.Character; local root=ch and ch:FindFirstChild("HumanoidRootPart"); if not root then return end
-        local parts=workspace:GetPartBoundsInRadius(root.Position, radius or 8)
-        for _, part in ipairs(parts) do
-            if part:IsA("BasePart") then
-                for _, obj in ipairs(part:GetDescendants()) do
-                    if obj:IsA("ProximityPrompt") then pcall(function() fireproximityprompt(obj) end) end
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj:IsA("ProximityPrompt") then
+                local part=obj.Parent
+                if part and not part:IsA("BasePart") then part=part:FindFirstChildOfClass("BasePart") or part end
+                if part and part:IsA("BasePart") and (root.Position-part.Position).Magnitude<=(radius or 8) then
+                    pcall(function() fireproximityprompt(obj) end)
                 end
             end
         end
@@ -771,7 +663,7 @@ do
     end
 
     if rpcRE then
-        rpcRE.OnClientEvent:Connect(function(_,tblArg)
+        rpcRE.OnClientEvent:Connect(function(_, tblArg)
             if type(tblArg)~="table" then return end
             local v1=tblArg[1]; local v2=tblArg[2]; local msg=tostring(v1 or ""):lower()
             if v2=="TextLabel" and tonumber(v1) then table.insert(S.rpcQueue,{type="timer",secs=tonumber(v1)}); return end
@@ -779,7 +671,8 @@ do
             elseif msg:find("sugar")   then table.insert(S.rpcQueue,{type="add_sugar"})
             elseif msg:find("gelatin") then table.insert(S.rpcQueue,{type="add_gelatin"})
             elseif msg:find("cook")    then table.insert(S.rpcQueue,{type="wait_cook"})
-            elseif msg:find("bag")     then table.insert(S.rpcQueue,{type="bag_result"}) end
+            elseif msg:find("bag")     then table.insert(S.rpcQueue,{type="bag_result"})
+            end
         end)
     end
 
@@ -804,26 +697,27 @@ do
         return nil
     end
 
-    local statusValue={Text="OFF",Color=Color3.fromRGB(255,60,90)}
-    local phaseValue={Text="Water"}
-    local timerValue={Text="0s"}
-    local safeModeStatusLbl={Text="OFF"}
-    local sellStatusLbl_ref={Text="OFF"}
-    local sellItemLbl_ref={Text="-"}
-    S.statusValue=statusValue; S.phaseValue=phaseValue; S.timerValue=timerValue
-    S.safeModeStatusLbl=safeModeStatusLbl; S.sellStatusLbl_ref=sellStatusLbl_ref; S.sellItemLbl_ref=sellItemLbl_ref
-
-    local statusLblRef,phaseLblRef,timerLblRef,safeLblRef,sellStatRef,sellItemRef
-    S._regStatusLbls=function(s,p,t,sf,ss,si)
+    -- GUI label refs (set via S._regStatusLbls after GUI is created)
+    local statusLblRef, phaseLblRef, timerLblRef, safeLblRef, sellStatRef, sellItemRef
+    S._regStatusLbls = function(s,p,t,sf,ss,si)
         statusLblRef=s; phaseLblRef=p; timerLblRef=t; safeLblRef=sf; sellStatRef=ss; sellItemRef=si
     end
 
-    setmetatable(statusValue,{__newindex=function(t,k,v) rawset(t,k,v) if k=="Text" and statusLblRef then pcall(function() statusLblRef:Set("Status: "..v) end) end end})
-    setmetatable(phaseValue, {__newindex=function(t,k,v) rawset(t,k,v) if k=="Text" and phaseLblRef  then pcall(function() phaseLblRef:Set("Phase: "..v)  end) end end})
-    setmetatable(timerValue, {__newindex=function(t,k,v) rawset(t,k,v) if k=="Text" and timerLblRef  then pcall(function() timerLblRef:Set("Timer: "..v)  end) end end})
-    setmetatable(safeModeStatusLbl,{__newindex=function(t,k,v) rawset(t,k,v) if k=="Text" and safeLblRef then pcall(function() safeLblRef:Set("Safe Mode: "..v) end) end end})
-    setmetatable(sellStatusLbl_ref,{__newindex=function(t,k,v) rawset(t,k,v) if k=="Text" and sellStatRef then pcall(function() sellStatRef:Set("Status: "..v) end) end end})
-    setmetatable(sellItemLbl_ref,  {__newindex=function(t,k,v) rawset(t,k,v) if k=="Text" and sellItemRef then pcall(function() sellItemRef:Set("Item: "..v)   end) end end})
+    local statusValue    = {Text="OFF",   Color=Color3.fromRGB(255,60,90)}
+    local phaseValue     = {Text="Water"}
+    local timerValue     = {Text="0s"}
+    local safeModeStatus = {Text="OFF"}
+    local sellStatRef_t  = {Text="OFF"}
+    local sellItemRef_t  = {Text="-"}
+    S.statusValue=statusValue; S.phaseValue=phaseValue; S.timerValue=timerValue
+    S.safeModeStatusLbl=safeModeStatus; S.sellStatusLbl_ref=sellStatRef_t; S.sellItemLbl_ref=sellItemRef_t
+
+    setmetatable(statusValue,   {__newindex=function(t,k,v) rawset(t,k,v); if k=="Text" and statusLblRef then pcall(function() statusLblRef:Set("Status: "..v) end) end end})
+    setmetatable(phaseValue,    {__newindex=function(t,k,v) rawset(t,k,v); if k=="Text" and phaseLblRef  then pcall(function() phaseLblRef:Set("Phase: "..v)   end) end end})
+    setmetatable(timerValue,    {__newindex=function(t,k,v) rawset(t,k,v); if k=="Text" and timerLblRef  then pcall(function() timerLblRef:Set("Timer: "..v)   end) end end})
+    setmetatable(safeModeStatus,{__newindex=function(t,k,v) rawset(t,k,v); if k=="Text" and safeLblRef   then pcall(function() safeLblRef:Set("Safe Mode: "..v) end) end end})
+    setmetatable(sellStatRef_t, {__newindex=function(t,k,v) rawset(t,k,v); if k=="Text" and sellStatRef  then pcall(function() sellStatRef:Set("Status: "..v)  end) end end})
+    setmetatable(sellItemRef_t, {__newindex=function(t,k,v) rawset(t,k,v); if k=="Text" and sellItemRef  then pcall(function() sellItemRef:Set("Item: "..v)    end) end end})
 
     local function _setStatus(msg,color) statusValue.Text=msg; if color then statusValue.Color=color end end
     local function _setPhase(txt) phaseValue.Text=txt end
@@ -882,7 +776,7 @@ do
         if hum then
             if hum.Health<S.lastHealth and S.lastHealth>0 then
                 S.safeModeActive=true; S.safeModeTimer=0
-                safeModeStatusLbl.Text="ACTIVE"
+                safeModeStatus.Text="ACTIVE"
                 pcall(function() fullyTeleport(S.SAFE_POS) end)
             end
             S.lastHealth=hum.Health
@@ -891,7 +785,7 @@ do
             S.safeModeTimer=S.safeModeTimer+dt
             if S.safeModeTimer>10 then
                 S.safeModeActive=false; S.safeModeTimer=0
-                safeModeStatusLbl.Text="STANDBY"
+                safeModeStatus.Text="STANDBY"
                 if S.fullySavedPos then pcall(function() fullyTeleport(S.fullySavedPos) end) end
             end
         end
@@ -909,7 +803,8 @@ do
     local function equipToolWithRetry(name, maxRetry)
         for _=1,(maxRetry or 5) do
             local ok=equipTool(name)
-            if ok then task.wait(0.3); local ch=LocalPlayer.Character
+            if ok then
+                task.wait(0.3); local ch=LocalPlayer.Character
                 if ch then for _,t in ipairs(ch:GetChildren()) do if t:IsA("Tool") and t.Name==name then return true end end end
             end
             task.wait(0.4)
@@ -923,11 +818,11 @@ do
     local function trySellOne(msName, setSt)
         local bS=countItem(CFG.ITEM_MS_SMALL); local bM=countItem(CFG.ITEM_MS_MEDIUM); local bL=countItem(CFG.ITEM_MS_LARGE)
         setSt("Equip: "..msName.."...", Color3.fromRGB(100,180,255))
-        local equipped=equipToolWithRetry(msName,4)
-        if not equipped then setSt("Failed to equip "..msName, Color3.fromRGB(210,40,40)); unequipAll(); task.wait(0.4); return false end
-        task.wait(0.5); local sold=false
+        if not equipToolWithRetry(msName,4) then setSt("Gagal equip "..msName, Color3.fromRGB(210,40,40)); unequipAll(); task.wait(0.4); return false end
+        task.wait(0.5)
+        local sold=false
         for attempt=1,SELL_RETRIES do
-            setSt("Sell: Hold E ("..attempt.."/"..SELL_RETRIES..")...", Color3.fromRGB(50,210,110))
+            setSt("Jual: Hold E ("..attempt.."/"..SELL_RETRIES..")...", Color3.fromRGB(50,210,110))
             firePromptNearby(CFG.SELL_RADIUS+5); task.wait(0.1)
             pcall(function() VIM:SendKeyEvent(true,Enum.KeyCode.E,false,game) end)
             local holdE=0
@@ -948,33 +843,41 @@ do
 
     local function doAutoSell(setSt)
         local msT=countAllMS()
-        if msT==0 then setSt("No MS found",Color3.fromRGB(160,160,180)); task.wait(0.8); return end
-        setSt("Detected "..msT.." MS...",Color3.fromRGB(50,210,110)); task.wait(0.4); waitCharStable(2.5)
-        if not isNearNPC(CFG.SELL_RADIUS+8) then setSt("Teleporting to NPC...",Color3.fromRGB(255,155,35)); fullyTeleport(S.NPC_MS_POS); task.wait(1.2); waitCharStable(2) end
+        if msT==0 then setSt("Tidak ada MS",Color3.fromRGB(160,160,180)); task.wait(0.8); return end
+        setSt("Deteksi "..msT.." MS...",Color3.fromRGB(50,210,110)); task.wait(0.4); waitCharStable(2.5)
+        if not isNearNPC(CFG.SELL_RADIUS+8) then setSt("Teleport ke NPC...",Color3.fromRGB(255,155,35)); fullyTeleport(S.NPC_MS_POS); task.wait(1.2); waitCharStable(2) end
         local sold=0; local maxFail=6; local fail=0; local tpR=0
         while countAllMS()>0 do
             local msN=getEquippableMS(); if not msN then break end
             if not isNearNPC(CFG.SELL_RADIUS+8) and tpR<2 then tpR=tpR+1; fullyTeleport(S.NPC_MS_POS); task.wait(1.2); waitCharStable(2); continue end
             local ok=trySellOne(msN,setSt)
             if ok then sold=sold+1; fail=0; tpR=0; task.wait(0.35)
-            else fail=fail+1
+            else
+                fail=fail+1
                 if fail>=2 and fail%2==0 then unequipAll(); task.wait(0.3); fullyTeleport(S.NPC_MS_POS); task.wait(1.2); waitCharStable(2) end
-                if fail>=maxFail then break end; task.wait(0.8) end
+                if fail>=maxFail then break end
+                task.wait(0.8)
+            end
         end
         unequipAll()
-        if sold>0 then setSt("Sell complete! "..sold.." MS | Total: "..S.totalSold,Color3.fromRGB(50,210,110))
-        else setSt("No MS sold.",Color3.fromRGB(50,210,110)) end
+        if sold>0 then setSt("Jual selesai! "..sold.." MS | Total: "..S.totalSold,Color3.fromRGB(50,210,110))
+        else setSt("Tidak ada MS terjual.",Color3.fromRGB(50,210,110)) end
         task.wait(1)
     end
     S.doAutoSell = doAutoSell
 
     local function doAutoBuy(setSt, overrideQty)
-        if not storePurchaseRE then pcall(function() local rs=game:GetService("ReplicatedStorage"); local re=rs:WaitForChild("RemoteEvents",8); if re then storePurchaseRE=re:WaitForChild("StorePurchase",8); S.storePurchaseRE=storePurchaseRE end end) end
-        if not storePurchaseRE then setSt("Remote not found!",Color3.fromRGB(210,40,40)); task.wait(1.5); return end
+        if not storePurchaseRE then
+            pcall(function()
+                local rs=game:GetService("ReplicatedStorage"); local re=rs:WaitForChild("RemoteEvents",8)
+                if re then storePurchaseRE=re:WaitForChild("StorePurchase",8); S.storePurchaseRE=storePurchaseRE end
+            end)
+        end
+        if not storePurchaseRE then setSt("Remote tidak ada!",Color3.fromRGB(210,40,40)); task.wait(1.5); return end
         local totalB=0
         for idx,item in ipairs(BUY_ITEMS) do
             local qty=overrideQty or S.buyQty[idx] or 1
-            setSt("Buy "..item.display.." x"..qty.."...",Color3.fromRGB(100,180,255))
+            setSt("Beli "..item.display.." x"..qty.."...",Color3.fromRGB(100,180,255))
             local before=countItem(item.name)
             for _=1,qty do pcall(function() storePurchaseRE:FireServer(item.name,1) end); task.wait(0.4) end
             local timeout=0; local gained=0
@@ -982,7 +885,7 @@ do
             totalB=totalB+gained; S.totalBuy=S.totalBuy+gained
             setSt(item.display.." x"..gained.." done!",Color3.fromRGB(80,220,130)); task.wait(0.2)
         end
-        setSt("Buy complete! "..totalB.." items.",Color3.fromRGB(80,220,130)); task.wait(1)
+        setSt("Beli selesai! "..totalB.." item.",Color3.fromRGB(80,220,130)); task.wait(1)
     end
     S.doAutoBuy = doAutoBuy
 
@@ -990,24 +893,24 @@ do
         S.isBusy=true
         for k in pairs(S.rpcQueue) do S.rpcQueue[k]=nil end
         local snapS=countItem(CFG.ITEM_MS_SMALL); local snapM=countItem(CFG.ITEM_MS_MEDIUM); local snapL=countItem(CFG.ITEM_MS_LARGE)
-        _setStatus("Adding Water...",Color3.fromRGB(100,180,255)); _setPhase("Adding Water..."); cookInteract(CFG.ITEM_WATER)
+        _setStatus("Masukkan Water...",Color3.fromRGB(100,180,255)); _setPhase("Masukkan Water..."); cookInteract(CFG.ITEM_WATER)
         local boilSecs; for _=1,30 do boilSecs=popTimer(); if boilSecs then break end; task.wait(0.1) end
         boilSecs=boilSecs or CFG.WATER_WAIT
-        if not countdown(boilSecs,"Boiling...",Color3.fromRGB(80,150,255)) then S.isBusy=false; return false end
-        _setStatus("Waiting for Sugar...",Color3.fromRGB(255,220,100)); _setPhase("Waiting for Sugar...")
+        if not countdown(boilSecs,"Mendidih...",Color3.fromRGB(80,150,255)) then S.isBusy=false; return false end
+        _setStatus("Tunggu Sugar...",Color3.fromRGB(255,220,100)); _setPhase("Tunggu Sugar...")
         waitRPC("add_sugar",10); if not S.isRunning then S.isBusy=false; return false end
-        _setStatus("Adding Sugar...",Color3.fromRGB(255,220,100)); _setPhase("Adding Sugar..."); cookInteract(CFG.ITEM_SUGAR); task.wait(0.3)
-        _setStatus("Waiting for Gelatin...",Color3.fromRGB(255,200,50)); _setPhase("Waiting for Gelatin...")
+        _setStatus("Masukkan Sugar...",Color3.fromRGB(255,220,100)); _setPhase("Masukkan Sugar..."); cookInteract(CFG.ITEM_SUGAR); task.wait(0.3)
+        _setStatus("Tunggu Gelatin...",Color3.fromRGB(255,200,50)); _setPhase("Tunggu Gelatin...")
         waitRPC("add_gelatin",10); if not S.isRunning then S.isBusy=false; return false end
-        _setStatus("Adding Gelatin...",Color3.fromRGB(255,200,50)); _setPhase("Adding Gelatin..."); cookInteract(CFG.ITEM_GEL); task.wait(0.3)
+        _setStatus("Masukkan Gelatin...",Color3.fromRGB(255,200,50)); _setPhase("Masukkan Gelatin..."); cookInteract(CFG.ITEM_GEL); task.wait(0.3)
         local cookSecs; for _=1,30 do cookSecs=popTimer(); if cookSecs then break end; task.wait(0.1) end
         cookSecs=cookSecs or CFG.COOK_WAIT
-        if not countdown(cookSecs,"Cooking...",Color3.fromRGB(80,140,255)) then S.isBusy=false; return false end
-        _setStatus("Waiting for Bag...",Color3.fromRGB(100,160,255)); _setPhase("Waiting for Bag..."); waitRPC("bag_result",12)
+        if not countdown(cookSecs,"Memasak...",Color3.fromRGB(80,140,255)) then S.isBusy=false; return false end
+        _setStatus("Tunggu Bag...",Color3.fromRGB(100,160,255)); _setPhase("Tunggu Bag..."); waitRPC("bag_result",12)
         local bag; local t2=0
         repeat bag=LocalPlayer.Backpack:FindFirstChild(CFG.ITEM_EMPTY); task.wait(0.3); t2=t2+0.3 until bag or t2>10
         if not bag then statusValue.Text="No Empty Bag!"; S.isBusy=false; return false end
-        _setPhase("Taking MS..."); cookInteract(CFG.ITEM_EMPTY)
+        _setPhase("Ambil MS..."); cookInteract(CFG.ITEM_EMPTY)
         local waitMS=0; local newS,newM,newL
         repeat
             task.wait(0.3); waitMS=waitMS+0.3
@@ -1017,13 +920,13 @@ do
         elseif newM>0 then S.patStats.medium=S.patStats.medium+newM
         elseif newL>0 then S.patStats.large=S.patStats.large+newL
         else S.patStats.small=S.patStats.small+1 end
-        _setPhase("Complete #"..totalMS()); _setTimer("Done"); S.isBusy=false; return true
+        _setPhase("Complete #"..(S.patStats.small+S.patStats.medium+S.patStats.large)); _setTimer("Done"); S.isBusy=false; return true
     end
 
     local function autoMSLoop()
         S.isRunning=true
         while S.isRunning do
-            if not hasAllIngredients() then _setStatus("INGREDIENTS DEPLETED!",Color3.fromRGB(255,60,90)); S.isRunning=false; break end
+            if not hasAllIngredients() then _setStatus("BAHAN HABIS!",Color3.fromRGB(255,60,90)); S.isRunning=false; break end
             local ok,err=pcall(doOneCook)
             if not ok then _setStatus("ERROR: "..tostring(err),Color3.fromRGB(255,60,90)); task.wait(2) end
             if S.isRunning then task.wait(0.3) end
@@ -1038,33 +941,423 @@ do
         local anchorConn=RunService.Heartbeat:Connect(function()
             if not S.fullyRunning then return end
             local ch=LocalPlayer.Character; local hm=ch and ch:FindFirstChildOfClass("Humanoid"); local sp=hm and hm.SeatPart
-            if sp then local veh=sp:FindFirstAncestorOfClass("Model"); if veh then for _,p in ipairs(veh:GetDescendants()) do if p:IsA("BasePart") then pcall(function() p.AssemblyLinearVelocity=Vector3.zero; p.AssemblyAngularVelocity=Vector3.zero end) end end end end
+            if sp then
+                local veh=sp:FindFirstAncestorOfClass("Model")
+                if veh then
+                    for _,p in ipairs(veh:GetDescendants()) do
+                        if p:IsA("BasePart") then pcall(function() p.AssemblyLinearVelocity=Vector3.zero; p.AssemblyAngularVelocity=Vector3.zero end) end
+                    end
+                end
+            end
         end)
         while S.fullyRunning do
             local target=S.fullyTarget
-            setFS("Teleporting to NPC..."); fullyTeleport(S.NPC_MS_POS); if not S.fullyRunning then break end
-            setFS("Buying ingredients for "..target.." MS..."); doAutoBuy(setFS,target); if not S.fullyRunning then break end; task.wait(0.5)
-            if S.fullySavedPos then setFS("Teleporting to Apartment..."); fullyTeleport(S.fullySavedPos) end
+            setFS("Teleport ke NPC..."); fullyTeleport(S.NPC_MS_POS); if not S.fullyRunning then break end
+            setFS("Beli bahan "..target.." MS..."); doAutoBuy(setFS,target); if not S.fullyRunning then break end; task.wait(0.5)
+            if S.fullySavedPos then setFS("Teleport ke Apart..."); fullyTeleport(S.fullySavedPos) end
             if not S.fullyRunning then break end; task.wait(1.5)
-            unequipAll()
-            for k in pairs(S.rpcQueue) do S.rpcQueue[k]=nil end
-            setFS("Cooking "..target.." MS...")
+            unequipAll(); for k in pairs(S.rpcQueue) do S.rpcQueue[k]=nil end; setFS("Masak "..target.." MS...")
             S.isRunning=true
-            while S.fullyRunning and hasAllIngredients() do 
-                doOneCook() 
+            while S.fullyRunning and hasAllIngredients() do doOneCook(); if S.fullyRunning then task.wait(0.3) end end
+            S.isRunning=false; if not S.fullyRunning then break end
+            if countAllMS()>0 then
+                unequipAll(); task.wait(0.3); setFS("Teleport jual..."); fullyTeleport(S.NPC_MS_POS); task.wait(1.8)
                 if not S.fullyRunning then break end
-                task.wait(0.3)
+                setFS("Jual semua..."); doAutoSell(setFS); if not S.fullyRunning then break end
             end
-            S.isRunning = false
-            
-            setFS("Selling MS...")
-            doAutoSell(setFS)
-            
-            if not S.fullyRunning then break end
-            task.wait(1)
+            task.wait(0.4)
         end
-        if anchorConn then anchorConn:Disconnect() end
-        S.fullyRunning = false
+        S.fullyRunning=false; S.isRunning=false; S.AutoMS_Running=false; anchorConn:Disconnect()
     end
     S.doAutoFully = doAutoFully
+
+    -- Auto-sell background loop
+    task.spawn(function()
+        while true do
+            task.wait(0.4)
+            if not S.autoSell_UI or S.asSelling then continue end
+            local char=LocalPlayer.Character; local hum=char and char:FindFirstChildOfClass("Humanoid"); local hrp=char and char:FindFirstChild("HumanoidRootPart")
+            if not char or not hum or not hrp or hum.Health<=0 then continue end
+            if countAllMS()==0 then sellItemRef_t.Text="-"; sellStatRef_t.Text="MENUNGGU"; continue end
+            S.asSelling=true; sellStatRef_t.Text="MENJUAL..."
+            doAutoSell(function(msg) sellStatRef_t.Text=msg; sellItemRef_t.Text=msg end)
+            S.asSelling=false
+        end
+    end)
+end
+
+repeat task.wait() until LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid")
+
+-- ================================================================
+-- GUI — Mentality Library
+-- REMOVED: Hide/Show system entirely
+-- ADDED: Majesty-style dynamic aim keybind UI
+-- ================================================================
+do
+    local Library=nil
+    local okL,errL=pcall(function()
+        Library=loadstring(game:HttpGet("https://raw.githubusercontent.com/sametexe001/sametlibs/refs/heads/main/Mentality/Library.lua"))()
+    end)
+    if not okL or not Library then warn("FAILED TO LOAD LIBRARY: "..tostring(errL)); return end
+
+    local Window=Library:Window({Name="Phantom.wtf", SubName="v1.0.0", Logo="135215559087473"})
+
+    -- Inventory labels pre-declared for runtime loop access
+    local waterLbl, gelLbl, sugLbl, bagLbl, msBagLbl
+
+    -- ============================================================
+    -- COMMUNICATION
+    -- ============================================================
+    Window:Category("Communication")
+    local ChatPage=Window:Page({Name="Server Chat", Icon="100050851789190", Columns=1})
+    local GlobalChat=ChatPage:GlobalChat(1)
+    local function getAvatar()
+        local ok,id=pcall(function() return Players:GetUserThumbnailAsync(LocalPlayer.UserId,Enum.ThumbnailType.HeadShot) end)
+        if ok and id then return id end
+        return "rbxassetid://78993485446406"
+    end
+    GlobalChat:OnMessageSendPressed(function()
+        GlobalChat:SendMessage(getAvatar(), LocalPlayer.DisplayName, GlobalChat:GetTypedMessage(), false)
+    end)
+
+    -- ============================================================
+    -- FARMING
+    -- ============================================================
+    Window:Category("Farming")
+    local pageAutoMS    = Window:Page({Name="Auto MS",    Icon="103180437044643"})
+    local pageAutoFully = Window:Page({Name="Auto Fully", Icon="108839695397679"})
+    local pageSellBuy   = Window:Page({Name="Sell / Buy", Icon="126497581491926"})
+
+    local secStatus  = pageAutoMS:Section({Name="Status Memasak", Side=1})
+    local statusLbl  = secStatus:Label("Status: OFF")
+    local phaseLbl   = secStatus:Label("Phase: Water")
+    local timerLbl   = secStatus:Label("Timer: 0s")
+
+    local secCook = pageAutoMS:Section({Name="Kontrol Masak", Side=2})
+    secCook:Button({Name="START Masak", Callback=function()
+        if not S.isRunning then
+            S.isRunning=true; S.statusValue.Text="STARTING"; S.statusValue.Color=Color3.fromRGB(255,215,0)
+            task.spawn(S.autoMSLoop)
+        end
+    end})
+    secCook:Button({Name="STOP Masak", Callback=function()
+        S.isRunning=false; S.AutoMS_Running=false
+        S.statusValue.Text="OFF"; S.statusValue.Color=Color3.fromRGB(255,60,90)
+        S.phaseValue.Text="Water"; S.timerValue.Text="0s"
+    end})
+
+    local secInv = pageAutoMS:Section({Name="Inventory", Side=1})
+    waterLbl = secInv:Label("Water: 0")
+    gelLbl   = secInv:Label("Gelatin: 0")
+    sugLbl   = secInv:Label("Sugar: 0")
+    bagLbl   = secInv:Label("Empty Bag: 0")
+    msBagLbl = secInv:Label("MS Bag: 0")
+
+    -- Register status labels
+    S._regStatusLbls(statusLbl, phaseLbl, timerLbl, nil, nil, nil)
+
+    -- Auto Fully
+    local secFullyStat = pageAutoFully:Section({Name="Status", Side=1})
+    local _fullyStatLbl = secFullyStat:Label("Belum dimulai")
+    local secFullyCtrl  = pageAutoFully:Section({Name="Kontrol", Side=1})
+    local afApartList = {
+        {name="Apart 1",x=1141.8,  y=11.041,z=450.351}, {name="Apart 2",x=1142.488,y=11.038,z=421.638},
+        {name="Apart 3",x=984.088, y=11.029,z=248.808}, {name="Apart 4",x=984.094, y=11.064,z=220.291},
+        {name="Apart 5",x=925.531, y=11.016,z=39.366},  {name="Apart 6",x=896.86,  y=11.042,z=38.65}
+    }
+    local apartNames={}; for _,a in ipairs(afApartList) do table.insert(apartNames,a.name) end
+    secFullyCtrl:Dropdown({Name="Apart Tujuan",Items=apartNames,Default="Apart 1",Flag="FullyApart",
+        Callback=function(val) for _,a in ipairs(afApartList) do if a.name==val then S.fullySavedPos=Vector3.new(a.x,a.y,a.z); break end end end})
+    secFullyCtrl:Slider({Name="Target MS/Loop",Min=1,Max=50,Default=10,Flag="FullyTarget",Suffix=" MS",Callback=function(v) S.fullyTarget=v end})
+    secFullyCtrl:Button({Name="START Auto Fully", Callback=function()
+        if S.fullyRunning then return end
+        local ch=LocalPlayer.Character; local h=ch and ch:FindFirstChildOfClass("Humanoid")
+        if h then S.lastHealth=h.Health end
+        pcall(function() _fullyStatLbl:Set("Running...") end)
+        task.spawn(function()
+            S.doAutoFully(function(msg) pcall(function() _fullyStatLbl:Set(msg) end) end)
+            pcall(function() _fullyStatLbl:Set("Stopped") end)
+        end)
+    end})
+    secFullyCtrl:Button({Name="STOP Auto Fully", Callback=function()
+        S.fullyRunning=false; S.isRunning=false; S.AutoMS_Running=false; S.safeModeActive=false
+        pcall(function() _fullyStatLbl:Set("Stopped") end)
+    end})
+
+    local secSafeMode = pageAutoFully:Section({Name="Safe Mode", Side=2})
+    local safeLblEl   = secSafeMode:Label("Safe Mode: OFF")
+    S._regStatusLbls(statusLbl, phaseLbl, timerLbl, safeLblEl, nil, nil)
+    secSafeMode:Toggle({Name="Enable Safe Mode", Default=false, Flag="SafeMode", Callback=function(v)
+        S.safeMode=v
+        if v then
+            local ch=LocalPlayer.Character; local h=ch and ch:FindFirstChildOfClass("Humanoid")
+            if h then S.lastHealth=h.Health end
+            S.safeModeStatusLbl.Text="STANDBY"
+        else
+            S.safeModeActive=false; S.safeModeStatusLbl.Text="OFF"
+        end
+    end})
+
+    -- Sell / Buy
+    local secAutoSell = pageSellBuy:Section({Name="Auto Sell", Side=1})
+    local sellStatLbl = secAutoSell:Label("Status: OFF")
+    local sellItemEl  = secAutoSell:Label("Item: -")
+    S._regStatusLbls(statusLbl, phaseLbl, timerLbl, safeLblEl, sellStatLbl, sellItemEl)
+    secAutoSell:Toggle({Name="Auto Sell", Default=false, Flag="AutoSellToggle", Callback=function(v)
+        S.autoSell_UI=v
+        if not v then S.asSelling=false; S.sellStatusLbl_ref.Text="OFF"; S.sellItemLbl_ref.Text="-"
+        else S.sellStatusLbl_ref.Text="ON" end
+    end})
+    secAutoSell:Button({Name="Jual Sekarang", Callback=function()
+        task.spawn(function() S.doAutoSell(function(msg) S.sellStatusLbl_ref.Text=msg; S.sellItemLbl_ref.Text=msg end) end)
+    end})
+
+    local secBuy = pageSellBuy:Section({Name="Buy Bahan", Side=2})
+    local buyW=1; local buyG=1; local buySu=1
+    secBuy:Slider({Name="Water",   Min=0,Max=50,Default=1,Suffix=" x",Callback=function(v) buyW=v   end})
+    secBuy:Slider({Name="Gelatin", Min=0,Max=50,Default=1,Suffix=" x",Callback=function(v) buyG=v   end})
+    secBuy:Slider({Name="Sugar",   Min=0,Max=50,Default=1,Suffix=" x",Callback=function(v) buySu=v  end})
+    secBuy:Button({Name="Beli Sekarang", Callback=function()
+        task.spawn(function()
+            S.buyQty[1]=buyG; S.buyQty[2]=buySu; S.buyQty[3]=buyW
+            S.doAutoBuy(function(msg) pcall(function() sellStatLbl:Set(msg) end) end)
+        end)
+    end})
+
+    -- ============================================================
+    -- WORLD
+    -- ============================================================
+    Window:Category("World")
+    local pageTP      = Window:Page({Name="Teleport", Icon="123944728972740"})
+    local pageVehicle = Window:Page({Name="Vehicle",  Icon="138827881557940"})
+
+    local tpLocs = {
+        {name="Dealership",  x=732.117, y=3.362, z=406.08},   {name="Jual/Beli MS",x=510.996, y=3.587,  z=598.392},
+        {name="Tier",        x=1094.74, y=3.188, z=158.092},  {name="Casino",      x=1154.863,y=4.289,  z=-46.848},
+        {name="Jual Casino", x=1017.581,y=4.545, z=-321.792}, {name="GS Ujung",    x=-464.548,y=3.737,  z=335.315},
+        {name="GS Mid",      x=218.748, y=3.729, z=-161.87},
+        {name="Apart 1",     x=1141.8,  y=11.041,z=450.351},  {name="Apart 2",     x=1142.488,y=11.038, z=421.638},
+        {name="Apart 3",     x=984.088, y=11.029,z=248.808},  {name="Apart 4",     x=984.094, y=11.064, z=220.291},
+        {name="Apart 5",     x=925.531, y=11.016,z=39.366},   {name="Apart 6",     x=896.86,  y=11.042, z=38.65}
+    }
+    local tpDestination=nil; local tpPending=false
+    local function onCharAdded(char)
+        if not tpPending or not tpDestination then return end; tpPending=false
+        task.spawn(function()
+            local hrp=char:WaitForChild("HumanoidRootPart",10); if not hrp then return end
+            task.wait(1); hrp.CFrame=CFrame.new(tpDestination.x,tpDestination.y+3,tpDestination.z); tpDestination=nil
+        end)
+    end
+    if LocalPlayer.Character then task.spawn(function() onCharAdded(LocalPlayer.Character) end) end
+    LocalPlayer.CharacterAdded:Connect(onCharAdded)
+    local function tpTo(x,y,z)
+        local ch=LocalPlayer.Character; local h=ch and ch:FindFirstChildOfClass("Humanoid")
+        tpDestination={x=x,y=y,z=z}; tpPending=true; if ch and h and h.Health>0 then h.Health=0 end
+    end
+    local tpNames={}; for _,l in ipairs(tpLocs) do table.insert(tpNames,l.name) end
+    local selTP=1
+    local secTP=pageTP:Section({Name="Lokasi", Side=1})
+    secTP:Dropdown({Name="Lokasi",Items=tpNames,Default=tpNames[1],
+        Callback=function(val) for i,l in ipairs(tpLocs) do if l.name==val then selTP=i; break end end end})
+    secTP:Button({Name="Teleport!", Callback=function() local l=tpLocs[selTP]; if l then tpTo(l.x,l.y,l.z) end end})
+
+    local secTPP=pageTP:Section({Name="TP ke Player", Side=2})
+    local pNames={}; local selTPP=nil
+    local function updatePList() pNames={}; for _,p in pairs(Players:GetPlayers()) do if p~=LocalPlayer then table.insert(pNames,p.Name) end end end
+    updatePList()
+    local pDD=secTPP:Dropdown({Name="Player",Items=pNames,Default=pNames[1] or "-",Callback=function(v) selTPP=v end})
+    secTPP:Button({Name="Refresh", Callback=function() updatePList(); pcall(function() pDD.Items=pNames end) end})
+    secTPP:Button({Name="TP ke Player", Callback=function()
+        if not selTPP then return end
+        for _,p in pairs(Players:GetPlayers()) do
+            if p.Name==selTPP then
+                local t=p.Character and p.Character:FindFirstChild("HumanoidRootPart")
+                if t then
+                    tpDestination={x=t.Position.X+2,y=t.Position.Y,z=t.Position.Z}; tpPending=true
+                    local c=LocalPlayer.Character; local h=c and c:FindFirstChildOfClass("Humanoid")
+                    if c and h and h.Health>0 then h.Health=0 end
+                end; break
+            end
+        end
+    end})
+    Players.PlayerAdded:Connect(function() task.wait(0.5); updatePList(); pcall(function() pDD.Items=pNames end) end)
+    Players.PlayerRemoving:Connect(function() task.wait(0.1); updatePList(); pcall(function() pDD.Items=pNames end) end)
+
+    local cachedSeat=nil
+    local function updateSeatCache()
+        local ch=LocalPlayer.Character; if not ch then cachedSeat=nil; return end
+        for _,o in ipairs(ch:GetChildren()) do
+            if o:IsA("Humanoid") then local s=o.SeatPart; if s and (s:IsA("Seat") or s:IsA("VehicleSeat")) then cachedSeat=s; return end end
+        end
+        cachedSeat=nil
+    end
+    local function hookVC(c) local h=c:WaitForChild("Humanoid",10); if not h then return end; h:GetPropertyChangedSignal("SeatPart"):Connect(updateSeatCache); updateSeatCache() end
+    if LocalPlayer.Character then task.spawn(hookVC, LocalPlayer.Character) end
+    LocalPlayer.CharacterAdded:Connect(function(c) task.spawn(hookVC,c) end)
+    local function tpVehicle(x,y,z)
+        task.spawn(function()
+            local ch=LocalPlayer.Character; if not ch then return end
+            local hrp=ch:FindFirstChild("HumanoidRootPart"); if not hrp then return end
+            local sp=Vector3.new(x,y+2,z); local tcf=CFrame.new(sp,sp+Vector3.new(0,0,1))
+            if cachedSeat then
+                local vm=cachedSeat:FindFirstAncestorWhichIsA("Model")
+                if vm and vm.PrimaryPart then vm:SetPrimaryPartCFrame(tcf*(vm.PrimaryPart.CFrame:Inverse()*cachedSeat.CFrame):Inverse())
+                elseif vm then local d=tcf*cachedSeat.CFrame:Inverse(); for _,p in ipairs(vm:GetDescendants()) do if p:IsA("BasePart") then p.CFrame=d*p.CFrame end end end
+            else hrp.CFrame=tcf end
+        end)
+    end
+
+    local vtpLocs = {
+        {name="Dealership",  x=732.117, y=3.362, z=406.08},   {name="Jual/Beli MS",x=510.996, y=3.587,  z=598.392},
+        {name="Tier",        x=1094.74, y=3.188, z=158.092},  {name="Casino",      x=1154.863,y=4.289,  z=-46.848},
+        {name="Jual Casino", x=1017.581,y=4.545, z=-321.792}, {name="GS Ujung",    x=-464.548,y=3.737,  z=335.315},
+        {name="GS Mid",      x=218.748, y=3.729, z=-161.87},  {name="Safe Spot",   x=120.854, y=4.297,  z=-587.633},
+        {name="Apart 1",     x=1141.8,  y=11.041,z=450.351},  {name="Apart 2",     x=1142.488,y=11.038, z=421.638},
+        {name="Apart 3",     x=984.088, y=11.029,z=248.808},  {name="Apart 4",     x=984.094, y=11.064, z=220.291},
+        {name="Apart 5",     x=925.531, y=11.016,z=39.366},   {name="Apart 6",     x=896.86,  y=11.042, z=38.65}
+    }
+    local vtpNames={}; for _,l in ipairs(vtpLocs) do table.insert(vtpNames,l.name) end
+    local selVTP=1
+    local secVTP=pageVehicle:Section({Name="Vehicle TP", Side=1})
+    secVTP:Dropdown({Name="Lokasi",Items=vtpNames,Default=vtpNames[1],
+        Callback=function(val) for i,l in ipairs(vtpLocs) do if l.name==val then selVTP=i; break end end end})
+    secVTP:Button({Name="TP Kendaraan!", Callback=function() local l=vtpLocs[selVTP]; if l then tpVehicle(l.x,l.y,l.z) end end})
+
+    local secVFly=pageVehicle:Section({Name="Vehicle Fly", Side=2})
+    secVFly:Toggle({Name="Vehicle Fly", Default=false, Flag="VehicleFly",
+        Callback=function(v) S.vFlyOn=v; if v then S.vFlyStart() else S.vFlyStop() end end})
+    secVFly:Slider({Name="Speed", Min=10, Max=200, Default=60, Suffix=" st/s", Callback=function(v) S.vFlySpd=v end})
+    secVFly:Label("WASD = Move  |  E = Up  |  Q = Down")
+
+    -- ============================================================
+    -- COMBAT — Aimbot + Majesty dynamic keybind system
+    -- ============================================================
+    Window:Category("Combat")
+    local pageAimbot = Window:Page({Name="Aimbot", Icon="134236649319095"})
+    local secAim     = pageAimbot:Section({Name="Aimbot", Side=1})
+
+    secAim:Toggle({Name="Enable Aimbot", Default=false, Flag="AimbotToggle",
+        Callback=function(v) S.aimOn=v; if not v then S.aimToggle=false end end})
+
+    -- Dynamic aim key label — shows current keybind at all times
+    local aimKeyLbl = secAim:Label("Aim Key: ["..S.aimKBLabel.."]")
+
+    -- Majesty-style keybind capture (supports KB + RMB + MMB + MB4 + MB5)
+    local isBindingAim = false
+    secAim:Button({Name="⚡ Set Aim Key", Callback=function()
+        if isBindingAim then return end
+        isBindingAim=true; S.aimCapturing=true
+        pcall(function() aimKeyLbl:Set(">> PRESS ANY KEY <<") end)
+    end})
+
+    -- Single InputBegan handles aim key capture
+    UserInputService.InputBegan:Connect(function(input, gpe)
+        if not isBindingAim then return end
+        -- Ignore LMB (don't capture left-click during menu use)
+        if input.UserInputType==Enum.UserInputType.MouseButton1 then return end
+        isBindingAim=false; S.aimCapturing=false; S.aimToggle=false
+
+        local kn = tostring(input.KeyCode):gsub("Enum%.KeyCode%.","")
+        local un = tostring(input.UserInputType):gsub("Enum%.UserInputType%.","")
+
+        if un=="MouseButton2" then
+            S.aimKBType="MouseButton"; S.aimKBMBtn=Enum.UserInputType.MouseButton2; S.aimKBCode=nil; S.aimKBLabel="RMB"
+        elseif un=="MouseButton3" then
+            S.aimKBType="MouseButton"; S.aimKBMBtn=Enum.UserInputType.MouseButton3; S.aimKBCode=nil; S.aimKBLabel="MMB"
+        elseif un=="MouseButton4" or kn=="MouseButton4" then
+            S.aimKBType="MB4"; S.aimKBMBtn=nil; S.aimKBCode=nil; S.aimKBLabel="MB4"
+        elseif un=="MouseButton5" or kn=="MouseButton5" then
+            S.aimKBType="MB5"; S.aimKBMBtn=nil; S.aimKBCode=nil; S.aimKBLabel="MB5"
+        elseif un=="Keyboard" and kn~="Unknown" and input.KeyCode~=Enum.KeyCode.Unknown then
+            S.aimKBType="KeyCode"; S.aimKBCode=input.KeyCode; S.aimKBMBtn=nil; S.aimKBLabel=kn
+        else
+            -- Invalid: re-open capture
+            isBindingAim=true; S.aimCapturing=true; return
+        end
+        -- FIX: Immediately update label with new key
+        pcall(function() aimKeyLbl:Set("Aim Key: ["..S.aimKBLabel.."]") end)
+    end)
+
+    secAim:Dropdown({Name="Mode",   Default="Hold",   Items={"Hold","Toggle"},    Callback=function(v) S.aimKBMode=v; S.aimToggle=false end})
+    secAim:Dropdown({Name="Method", Default="Camera",  Items={"Camera","FreeAim"}, Callback=function(v) S.aimMode=v end})
+
+    local secTgt = pageAimbot:Section({Name="Target", Side=2})
+    secTgt:Dropdown({Name="Target Part", Default="Head",      Items={"Head","HumanoidRootPart"}, Callback=function(v) S.aimPart=v end})
+    secTgt:Dropdown({Name="Priority",    Default="Crosshair", Items={"Crosshair","Distance"},    Callback=function(v) S.aimPriority=v end})
+    secTgt:Slider({Name="Max Distance",  Min=0, Max=2000, Default=500, Suffix=" st", Callback=function(v) S.aimMaxDist=v end})
+
+    local secFOV = pageAimbot:Section({Name="FOV Circle", Side=1})
+    secFOV:Slider({Name="FOV Radius", Min=20, Max=800, Default=250, Suffix=" px", Callback=function(v) S.aimFOV=v end})
+    local fovColLbl = secFOV:Label("Circle Color")
+    fovColLbl:Colorpicker({Name="Color", Default=Color3.fromRGB(0,196,255), Callback=function(v) S.aimFovCol=v end})
+
+    local secSmooth = pageAimbot:Section({Name="Smoothing", Side=2})
+    secSmooth:Slider({Name="Smoothness",    Min=0, Max=20,  Default=5,     Suffix="",    Callback=function(v) S.aimSmooth=v   end})
+    secSmooth:Toggle({Name="Prediction",    Default=false,  Flag="AimbotPrediction",    Callback=function(v) S.aimPred=v    end})
+    secSmooth:Slider({Name="Pred Strength", Min=0, Max=1,   Default=0.165, Decimals=3, Suffix="", Callback=function(v) S.aimPredStr=v end})
+
+    -- ============================================================
+    -- VISUALS — ESP + Whitelist
+    -- ============================================================
+    Window:Category("Visuals")
+    local pageESP = Window:Page({Name="ESP",       Icon="100050851789190"})
+    local pageWL  = Window:Page({Name="Whitelist", Icon="123554105934637"})
+
+    local secESP = pageESP:Section({Name="Player ESP", Side=1})
+    secESP:Toggle({Name="Enable ESP",               Default=false, Flag="ESPEnabled",  Callback=function(v) S.ESP_ENABLED=v end})
+    secESP:Toggle({Name="Skeleton ESP (CPU heavy)", Default=false, Flag="SkeletonESP", Callback=function(v) S.ESP_SKELETON=v end})
+    secESP:Slider({Name="Max Distance", Min=50, Max=2000, Default=500, Suffix=" st",  Callback=function(v) S.ESP_MAX_DIST=v end})
+
+    local secESPOpt  = pageESP:Section({Name="Options", Side=2})
+    local boxColorLbl = secESPOpt:Label("Box Color")
+    boxColorLbl:Colorpicker({Name="BoxColor", Default=Color3.fromRGB(0,255,255),
+        Callback=function(v) S.ESP_BOX_COLOR=v; if S.updateESPColor then S.updateESPColor(v) end end})
+    secESPOpt:Label("Shows: Box, Name, HP,")
+    secESPOpt:Label("Distance, Tool, Skeleton")
+
+    local secWL = pageWL:Section({Name="Manager", Side=1})
+    secWL:Label("Ignored by ESP & Aimbot")
+    local function getWLText() local n={}; for nm in pairs(S.whitelist) do table.insert(n,nm) end; return #n==0 and "None" or table.concat(n,", ") end
+    local wlLbl = secWL:Label("Whitelisted: None")
+    local wlPN={}; local selWL=nil
+    local function updateWL() wlPN={}; for _,p in pairs(Players:GetPlayers()) do if p~=LocalPlayer and not S.whitelist[p.Name] then table.insert(wlPN,p.Name) end end end
+    updateWL()
+    local wlDD=secWL:Dropdown({Name="Player", Items=wlPN, Default=wlPN[1] or "-", Callback=function(v) selWL=v end})
+    secWL:Button({Name="Refresh List", Callback=function()
+        updateWL(); pcall(function() wlDD.Items=wlPN end)
+        if #wlPN>0 then selWL=wlPN[1] else selWL=nil end
+    end})
+    secWL:Button({Name="Add",      Callback=function() if not selWL or selWL=="-" then return end; S.whitelist[selWL]=true;  updateWL(); wlLbl:Set("WL: "..getWLText()) end})
+    secWL:Button({Name="Remove",   Callback=function() if not selWL or selWL=="-" then return end; S.whitelist[selWL]=nil;   updateWL(); wlLbl:Set("WL: "..getWLText()) end})
+    secWL:Button({Name="Clear All",Callback=function() S.whitelist={}; updateWL(); wlLbl:Set("WL: None") end})
+    Players.PlayerAdded:Connect(function()   task.wait(0.5); updateWL(); pcall(function() wlDD.Items=wlPN end) end)
+    Players.PlayerRemoving:Connect(function() task.wait(0.1); updateWL(); pcall(function() wlDD.Items=wlPN end) end)
+
+    -- ============================================================
+    -- INIT + INVENTORY LOOP
+    -- ============================================================
+    task.defer(function()
+        Window:Init()
+
+        -- Inventory update loop
+        task.spawn(function()
+            while true do
+                task.wait(1)
+                pcall(function()
+                    waterLbl:Set("Water: "     ..S.countItem("Water"))
+                    gelLbl:Set("Gelatin: "     ..S.countItem("Gelatin"))
+                    sugLbl:Set("Sugar: "       ..S.countItem("Sugar Block Bag"))
+                    bagLbl:Set("Empty Bag: "   ..S.countItem("Empty Bag"))
+                    msBagLbl:Set("MS Bag: "    ..S.countAllMS())
+                end)
+            end
+        end)
+
+        Library:Notification({
+            Title       = "Phantom.wtf",
+            Description = "Loaded! All features OFF by default.",
+            Duration    = 4,
+            Icon        = "135215559087473"
+        })
+    end)
 end
