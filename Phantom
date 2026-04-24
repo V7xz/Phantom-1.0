@@ -1,8 +1,19 @@
 _G.KEY = _G.KEY or "YOUR-KEY-HERE"
 
+local HttpService      = game:GetService("HttpService")
+local Players          = game:GetService("Players")
+local LocalPlayer      = Players.LocalPlayer
+local RunService       = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace        = game:GetService("Workspace")
+local Camera           = Workspace.CurrentCamera
+local VIM              = game:GetService("VirtualInputManager")
+
+local S = {}  -- ← only ONE declaration here
+
 do
     local HWID = game:GetService("RbxAnalyticsService"):GetClientId()
-    local API  = "phantom-production-4aba.up.railway.app"
+    local API  = "https://phantom-production-4aba.up.railway.app/validate"
     local ok, response = pcall(function()
         local body = HttpService:JSONEncode({ key = _G.KEY, hwid = HWID })
         if request then
@@ -15,30 +26,14 @@ do
     local ok2, data = pcall(function() return HttpService:JSONDecode(response.Body) end)
     if not ok2 then warn("JSON DECODE FAILED:", data); return end
     if not data.success then warn("KEY INVALID: "..(data.message or "unknown")); return end
-    print("ENJOY THE SCRIPT NIGGER")
     print("Phantom.wtf v1.0.0 LOADED")
 end
 
--- ================================================================
--- EASY CONFIGURATION
--- ================================================================
 _G.PhantomConfig = {
     DefaultAimKey = Enum.KeyCode.E,
 }
 
-local HttpService      = game:GetService("HttpService")
-local Players          = game:GetService("Players")
-local LocalPlayer      = Players.LocalPlayer
-local RunService       = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
-local Workspace        = game:GetService("Workspace")
-local Camera           = Workspace.CurrentCamera
-local VIM              = game:GetService("VirtualInputManager")
-
-local S = {}
-
 S.whitelist = {}
-
 -- ================================================================
 -- ESP SYSTEM
 -- Source: Phantom_wtf.lua corner-box structure
