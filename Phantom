@@ -9,8 +9,11 @@ local Workspace        = game:GetService("Workspace")
 local Camera           = Workspace.CurrentCamera
 local VIM              = game:GetService("VirtualInputManager")
 
-local S = {}  -- ← only ONE declaration here
+local S = {}
 
+-- ================================================================
+-- VALIDATION
+-- ================================================================
 do
     local HWID = game:GetService("RbxAnalyticsService"):GetClientId()
     local API  = "https://phantom-production-4aba.up.railway.app/validate"
@@ -34,12 +37,11 @@ _G.PhantomConfig = {
 }
 
 S.whitelist = {}
+
 -- ================================================================
--- ESP SYSTEM — FIXED & OPTIMISED
--- FIX: Moved to Heartbeat to avoid blocking RenderStepped
---      (was causing frame stutter when ESP + aimbot both on RenderStepped)
--- FIX: Skip update if player has no character at all (saves CPU)
--- FIX: Only hide when _vis flag is true (no redundant write spam)
+-- ESP SYSTEM
+-- Throttled to 30fps on Heartbeat (not RenderStepped) to avoid
+-- competing with aimbot. Hide-once pattern prevents blink on disable.
 -- ================================================================
 do
     S.ESP_ENABLED   = false
@@ -54,7 +56,6 @@ do
         {"UpperTorso","LeftHand"}, {"UpperTorso","RightHand"},
         {"LowerTorso","LeftFoot"}, {"LowerTorso","RightFoot"},
     }
-    -- R6 fallback
     local R6FB = {
         UpperTorso="Torso", LowerTorso="Torso",
         LeftHand="Left Arm", RightHand="Right Arm",
@@ -62,7 +63,7 @@ do
     }
 
     local function hide(d)
-        if not d or not d._vis then return end -- PERF: skip if already hidden
+        if not d or not d._vis then return end
         for i = 1, 4 do
             if d[i] then d[i][1].Visible=false; d[i][2].Visible=false end
         end
@@ -123,7 +124,6 @@ do
         ESP_OBJ[plr] = d
     end
 
-    -- PERF: direct child scan, no FindFirstChild overhead
     local function getPart(char, name)
         for _, child in ipairs(char:GetChildren()) do
             if child:IsA("BasePart") and child.Name == name then return child end
@@ -144,7 +144,6 @@ do
             d._char = char
             d._hum  = char:FindFirstChildOfClass("Humanoid")
             d._hrp  = getPart(char, "HumanoidRootPart")
-            -- FIX: hide immediately on char change so no stale box flashes
             hide(d)
         end
         local hum = d._hum; local hrp = d._hrp
@@ -162,7 +161,6 @@ do
 
         local headPos = head.Position + Vector3.new(0, 0.5, 0)
         local rootPos = hrp.Position  - Vector3.new(0, 3,   0)
-
         local headSP, onSc1 = cam:WorldToViewportPoint(headPos)
         local rootSP, onSc2 = cam:WorldToViewportPoint(rootPos)
         if not (onSc1 or onSc2) then hide(d); return end
@@ -246,9 +244,6 @@ do
         end
     end
 
-    -- FIX PERFORMANCE: ESP moved to Heartbeat (not RenderStepped).
-    -- RenderStepped is reserved for aimbot so they don't compete.
-    -- Throttled to 30fps — smooth visually, very light on CPU.
     local _ea = 0
     RunService.Heartbeat:Connect(function(dt)
         _ea = _ea + dt
@@ -266,10 +261,7 @@ do
         local myHRP = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
         if not myHRP then return end
         for plr in pairs(ESP_OBJ) do
-            -- PERF: skip if no character at all (saves WorldToViewportPoint calls)
-            if plr.Character then
-                pcall(update, plr, cam, myHRP)
-            end
+            if plr.Character then pcall(update, plr, cam, myHRP) end
         end
     end)
 
@@ -279,7 +271,7 @@ do
 end
 
 -- ================================================================
--- VEHICLE FLY (E = UP, Q = DOWN)
+-- VEHICLE FLY (E = UP, Q = DOWN — cached parts for performance)
 -- ================================================================
 do
     S.vFlyOn  = false
@@ -534,24 +526,24 @@ do
         {name="Water",           display="Water"}
     }
 
-    -- ================================================================
-    -- BUG FIX 1: INVENTORY GA KE BACA
-    -- Root cause: countItem was scanning Backpack:GetChildren() fresh
-    -- every call. With 5 labels updating per second each calling
-    -- countItem separately = 5x Backpack scan per second.
-    -- FIX: cache Backpack + Character children into a lookup table,
-    --      update cache only when inventory changes (ChildAdded/Removed).
-    -- ================================================================
-    local _invCache = {}  -- name -> count
+    -- ============================================================
+    -- BUG FIX 3: INVENTORY TRACKER
+    -- Problem: Cache wasn't being force-refreshed in the display loop.
+    -- Fix: Only scan Tool instances (not all backpack children).
+    --      Expose S.markInvDirty so GUI loop forces a rebuild each second.
+    -- ============================================================
+    local _invCache = {}
     local _invDirty = true
 
     local function rebuildInvCache()
-        local t = {}
+        local t  = {}
         local bp = LocalPlayer.Backpack
         if bp then
             for _, item in ipairs(bp:GetChildren()) do
-                local n = item.Name
-                t[n] = (t[n] or 0) + 1
+                if item:IsA("Tool") then
+                    local n = item.Name
+                    t[n] = (t[n] or 0) + 1
+                end
             end
         end
         local ch = LocalPlayer.Character
@@ -567,8 +559,8 @@ do
         _invDirty = false
     end
 
-    -- Mark dirty on any backpack change
     local function onInvChanged() _invDirty = true end
+
     LocalPlayer.Backpack.ChildAdded:Connect(onInvChanged)
     LocalPlayer.Backpack.ChildRemoved:Connect(onInvChanged)
     LocalPlayer.CharacterAdded:Connect(function(char)
@@ -585,12 +577,11 @@ do
         if _invDirty then rebuildInvCache() end
         return _invCache[name] or 0
     end
-    S.countItem = countItem
+    S.countItem    = countItem
+    S.markInvDirty = function() _invDirty = true end -- exposed for GUI loop
 
-    local function totalMS() return S.patStats.small+S.patStats.medium+S.patStats.large end
-    local function countAllMS()
-        return countItem(CFG.ITEM_MS_SMALL)+countItem(CFG.ITEM_MS_MEDIUM)+countItem(CFG.ITEM_MS_LARGE)
-    end
+    local function totalMS()    return S.patStats.small+S.patStats.medium+S.patStats.large end
+    local function countAllMS() return countItem(CFG.ITEM_MS_SMALL)+countItem(CFG.ITEM_MS_MEDIUM)+countItem(CFG.ITEM_MS_LARGE) end
     S.countAllMS = countAllMS
 
     local function getEquippableMS()
@@ -614,14 +605,7 @@ do
     end
     S.unequipAll = unequipAll
 
-    -- ================================================================
-    -- BUG FIX 2: BERAT / FREEZE
-    -- Root cause: firePromptNearby used workspace:GetDescendants()
-    -- which scans the ENTIRE game world every time it's called.
-    -- Called multiple times per cook cycle = massive lag spike.
-    -- FIX: Use workspace:GetPartBoundsInRadius() — only scans parts
-    --      within the radius, orders of magnitude faster.
-    -- ================================================================
+    -- Uses GetPartBoundsInRadius instead of workspace:GetDescendants() (much faster)
     local function firePromptNearby(radius)
         local ch   = LocalPlayer.Character
         local root = ch and ch:FindFirstChild("HumanoidRootPart")
@@ -684,30 +668,61 @@ do
         return nil
     end
 
-    -- ================================================================
-    -- BUG FIX 4: STATUS MEMASAK & AUTOFULLY GA KE BACA
-    -- Root cause: _regStatusLbls was called 3 times in GUI section.
-    -- Each call OVERWRITES all 6 refs. So:
-    --   Call 1 (line 968): sets statusLbl,phaseLbl,timerLbl — sell refs = nil
-    --   Call 2 (line 991): sets safeLblEl — sell refs still nil
-    --   Call 3 (line 1001): sets sellStatLbl,sellItemEl — but NOW
-    --     statusLbl/phaseLbl/timerLbl are passed again (same values, OK)
-    --     BUT safeLblRef is passed from outer scope = correct
-    -- The real bug: the status labels work but the SETMETATABLE bindings
-    -- read statusLblRef/phaseLblRef WHICH ARE NIL until _regStatusLbls
-    -- is called AFTER the labels are created. The metatables are set up
-    -- before the GUI is built, so the first Set() calls fire before
-    -- the refs are registered.
-    -- FIX: Use a single _regStatusLbls call with ALL refs at once,
-    --      after ALL labels are created. Expose all refs via S table
-    --      so the metatable closures can read the current values.
-    -- ================================================================
-    local statusValue        = {Text="OFF",  Color=Color3.fromRGB(255,60,90)}
-    local phaseValue         = {Text="Water"}
-    local timerValue         = {Text="0s"}
-    local safeModeStatusLbl  = {Text="OFF"}
-    local sellStatusLbl_ref  = {Text="OFF"}
-    local sellItemLbl_ref    = {Text="-"}
+    -- ============================================================
+    -- BUG FIX 2: STATUS LABELS NOT UPDATING
+    -- Root cause: Lua's __newindex metamethod ONLY fires when a key
+    -- does NOT exist in the table. Since statusValue={Text="OFF",...}
+    -- pre-initialises "Text", subsequent statusValue.Text="x" bypasses
+    -- __newindex entirely and the GUI label never updates.
+    --
+    -- Fix: Use a PROXY pattern — the proxy table is always kept empty
+    -- so __newindex fires on EVERY assignment, no exceptions.
+    -- Internal values live in a private storage table read via __index.
+    -- ============================================================
+    local guiRefs = {
+        statusLbl = nil, phaseLbl  = nil, timerLbl = nil,
+        safeLbl   = nil, sellStat  = nil, sellItem = nil,
+    }
+    S._guiRefs = guiRefs
+
+    -- Single registration call (GUI calls this once after all labels exist)
+    S._regAllRefs = function(sl, pl, tl, sf, ss, si)
+        guiRefs.statusLbl = sl; guiRefs.phaseLbl  = pl; guiRefs.timerLbl = tl
+        guiRefs.safeLbl   = sf; guiRefs.sellStat  = ss; guiRefs.sellItem = si
+    end
+
+    -- Proxy factory: proxy is always empty so __newindex always fires
+    local function makeProxy(defaults, onTextChanged)
+        local store = {}
+        for k, v in pairs(defaults) do store[k] = v end
+        return setmetatable({}, {
+            __index    = function(_, k)    return store[k] end,
+            __newindex = function(_, k, v)
+                store[k] = v
+                if k == "Text" then onTextChanged(tostring(v)) end
+            end,
+        })
+    end
+
+    local statusValue = makeProxy({Text="OFF", Color=Color3.fromRGB(255,60,90)}, function(v)
+        if guiRefs.statusLbl then pcall(function() guiRefs.statusLbl:Set("Status: "..v) end) end
+    end)
+    local phaseValue = makeProxy({Text="Water"}, function(v)
+        if guiRefs.phaseLbl  then pcall(function() guiRefs.phaseLbl:Set("Phase: "..v)   end) end
+    end)
+    local timerValue = makeProxy({Text="0s"}, function(v)
+        if guiRefs.timerLbl  then pcall(function() guiRefs.timerLbl:Set("Timer: "..v)   end) end
+    end)
+    local safeModeStatusLbl = makeProxy({Text="OFF"}, function(v)
+        if guiRefs.safeLbl   then pcall(function() guiRefs.safeLbl:Set("Safe Mode: "..v) end) end
+    end)
+    local sellStatusLbl_ref = makeProxy({Text="OFF"}, function(v)
+        if guiRefs.sellStat  then pcall(function() guiRefs.sellStat:Set("Status: "..v)  end) end
+    end)
+    local sellItemLbl_ref = makeProxy({Text="-"}, function(v)
+        if guiRefs.sellItem  then pcall(function() guiRefs.sellItem:Set("Item: "..v)    end) end
+    end)
+
     S.statusValue       = statusValue
     S.phaseValue        = phaseValue
     S.timerValue        = timerValue
@@ -715,76 +730,22 @@ do
     S.sellStatusLbl_ref = sellStatusLbl_ref
     S.sellItemLbl_ref   = sellItemLbl_ref
 
-    -- Use a single ref table that GUI will populate after all labels created
-    local guiRefs = {
-        statusLbl  = nil,
-        phaseLbl   = nil,
-        timerLbl   = nil,
-        safeLbl    = nil,
-        sellStat   = nil,
-        sellItem   = nil,
-    }
-    S._guiRefs = guiRefs
-
-    -- FIX: single registration call, sets ALL refs at once
-    -- Called once from GUI after ALL label objects are created
-    S._regAllRefs = function(sl, pl, tl, sf, ss, si)
-        guiRefs.statusLbl = sl
-        guiRefs.phaseLbl  = pl
-        guiRefs.timerLbl  = tl
-        guiRefs.safeLbl   = sf
-        guiRefs.sellStat  = ss
-        guiRefs.sellItem  = si
+    local function _setStatus(msg, color)
+        statusValue.Text = msg
+        if color then statusValue.Color = color end
     end
-
-    setmetatable(statusValue,{__newindex=function(t,k,v)
-        rawset(t,k,v)
-        if k=="Text" and guiRefs.statusLbl then
-            pcall(function() guiRefs.statusLbl:Set("Status: "..v) end)
-        end
-    end})
-    setmetatable(phaseValue,{__newindex=function(t,k,v)
-        rawset(t,k,v)
-        if k=="Text" and guiRefs.phaseLbl then
-            pcall(function() guiRefs.phaseLbl:Set("Phase: "..v) end)
-        end
-    end})
-    setmetatable(timerValue,{__newindex=function(t,k,v)
-        rawset(t,k,v)
-        if k=="Text" and guiRefs.timerLbl then
-            pcall(function() guiRefs.timerLbl:Set("Timer: "..v) end)
-        end
-    end})
-    setmetatable(safeModeStatusLbl,{__newindex=function(t,k,v)
-        rawset(t,k,v)
-        if k=="Text" and guiRefs.safeLbl then
-            pcall(function() guiRefs.safeLbl:Set("Safe Mode: "..v) end)
-        end
-    end})
-    setmetatable(sellStatusLbl_ref,{__newindex=function(t,k,v)
-        rawset(t,k,v)
-        if k=="Text" and guiRefs.sellStat then
-            pcall(function() guiRefs.sellStat:Set("Status: "..v) end)
-        end
-    end})
-    setmetatable(sellItemLbl_ref,{__newindex=function(t,k,v)
-        rawset(t,k,v)
-        if k=="Text" and guiRefs.sellItem then
-            pcall(function() guiRefs.sellItem:Set("Item: "..v) end)
-        end
-    end})
-
-    local function _setStatus(msg,color) statusValue.Text=msg; if color then statusValue.Color=color end end
-    local function _setPhase(txt) phaseValue.Text=txt end
-    local function _setTimer(txt) timerValue.Text=txt end
+    local function _setPhase(txt) phaseValue.Text = txt end
+    local function _setTimer(txt) timerValue.Text = txt end
 
     local function countdown(secs, phaseTxt, color)
         for i=secs,1,-1 do
             if not S.isRunning then return false end
             while S.safeModeActive do if not S.isRunning then return false end; task.wait(0.5) end
             if not S.isRunning then return false end
-            statusValue.Text=phaseTxt; if color then statusValue.Color=color end
-            phaseValue.Text=phaseTxt; timerValue.Text=i.."s"
+            statusValue.Text = phaseTxt
+            if color then statusValue.Color = color end
+            phaseValue.Text  = phaseTxt
+            timerValue.Text  = i.."s"
             task.wait(1)
         end
         return true
@@ -831,7 +792,7 @@ do
         if hum then
             if hum.Health<S.lastHealth and S.lastHealth>0 then
                 S.safeModeActive=true; S.safeModeTimer=0
-                safeModeStatusLbl.Text="ACTIVE"
+                safeModeStatusLbl.Text = "ACTIVE"
                 pcall(function() fullyTeleport(S.SAFE_POS) end)
             end
             S.lastHealth=hum.Health
@@ -840,7 +801,7 @@ do
             S.safeModeTimer=S.safeModeTimer+dt
             if S.safeModeTimer>10 then
                 S.safeModeActive=false; S.safeModeTimer=0
-                safeModeStatusLbl.Text="STANDBY"
+                safeModeStatusLbl.Text = "STANDBY"
                 if S.fullySavedPos then pcall(function() fullyTeleport(S.fullySavedPos) end) end
             end
         end
@@ -890,7 +851,6 @@ do
             local holdE=0
             while holdE<SELL_HOLD do
                 task.wait(0.1); holdE=holdE+0.1
-                -- FIX: mark dirty before checking so count is fresh
                 _invDirty = true
                 local diff=(bS-countItem(CFG.ITEM_MS_SMALL))+(bM-countItem(CFG.ITEM_MS_MEDIUM))+(bL-countItem(CFG.ITEM_MS_LARGE))
                 if diff>0 then
@@ -1054,6 +1014,7 @@ do
     end
     S.doAutoFully = doAutoFully
 
+    -- Auto-sell background loop (only runs when S.autoSell_UI is true)
     task.spawn(function()
         while true do
             task.wait(0.4)
@@ -1080,55 +1041,72 @@ do
     end)
     if not okL or not Library then warn("FAILED TO LOAD LIBRARY: "..tostring(errL)); return end
 
-    local KeybindList=Library:KeybindList("Phantom keybind")
-    local Window=Library:Window({Name="Phantom.wtf",SubName="v1.0.0",Logo="108284603654233"})
+    local KeybindList = Library:KeybindList("Phantom keybind")
+    local Window      = Library:Window({Name="Phantom.wtf", SubName="v1.0.0", Logo="108284603654233"})
 
+    -- ============================================================
+    -- COMMUNICATION
+    -- ============================================================
     Window:Category("Communication")
-    local ChatPage=Window:Page({Name="Server Chat",Icon="100050851789190",Columns=1})
-    local GlobalChat=ChatPage:GlobalChat(1)
+    local ChatPage   = Window:Page({Name="Server Chat", Icon="100050851789190", Columns=1})
+    local GlobalChat = ChatPage:GlobalChat(1)
     local function getAvatar()
         local ok,id=pcall(function() return Players:GetUserThumbnailAsync(LocalPlayer.UserId,Enum.ThumbnailType.HeadShot) end)
         if ok and id then return id end
         return "rbxassetid://78993485446406"
     end
     GlobalChat:OnMessageSendPressed(function()
-        GlobalChat:SendMessage(getAvatar(),LocalPlayer.DisplayName,GlobalChat:GetTypedMessage(),false)
+        GlobalChat:SendMessage(getAvatar(), LocalPlayer.DisplayName, GlobalChat:GetTypedMessage(), false)
     end)
 
+    -- ============================================================
+    -- FARMING
+    -- ============================================================
     Window:Category("Farming")
     local pageAutoMS    = Window:Page({Name="Auto MS",    Icon="103180437044643"})
     local pageAutoFully = Window:Page({Name="Auto Fully", Icon="108839695397679"})
     local pageSellBuy   = Window:Page({Name="Sell / Buy", Icon="126497581491926"})
 
-    local secStatus = pageAutoMS:Section({Name="Status Memasak",Side=1})
+    -- Status labels
+    local secStatus = pageAutoMS:Section({Name="Status Memasak", Side=1})
     local statusLbl = secStatus:Label("Status: OFF")
     local phaseLbl  = secStatus:Label("Phase: Water")
     local timerLbl  = secStatus:Label("Timer: 0s")
 
-    local secCook = pageAutoMS:Section({Name="Kontrol Masak",Side=2})
-    secCook:Button({Name="START Masak",Callback=function()
+    -- Cooking controls
+    local secCook = pageAutoMS:Section({Name="Kontrol Masak", Side=2})
+    secCook:Button({Name="START Masak", Callback=function()
         if not S.isRunning then
-            S.isRunning=true; S.statusValue.Text="STARTING"; S.statusValue.Color=Color3.fromRGB(255,215,0)
+            S.isRunning        = true
+            S.statusValue.Text  = "STARTING"
+            S.statusValue.Color = Color3.fromRGB(255,215,0)
             task.spawn(S.autoMSLoop)
         end
     end})
-    secCook:Button({Name="STOP Masak",Callback=function()
-        S.isRunning=false; S.AutoMS_Running=false
-        S.statusValue.Text="OFF"; S.statusValue.Color=Color3.fromRGB(255,60,90)
-        S.phaseValue.Text="Water"; S.timerValue.Text="0s"
+    secCook:Button({Name="STOP Masak", Callback=function()
+        S.isRunning        = false
+        S.AutoMS_Running   = false
+        S.statusValue.Text  = "OFF"
+        S.statusValue.Color = Color3.fromRGB(255,60,90)
+        S.phaseValue.Text  = "Water"
+        S.timerValue.Text  = "0s"
     end})
 
-    local secInv  = pageAutoMS:Section({Name="Inventory",Side=1})
-    local waterLbl= secInv:Label("Water: 0")
-    local gelLbl  = secInv:Label("Gelatin: 0")
-    local sugLbl  = secInv:Label("Sugar: 0")
-    local bagLbl  = secInv:Label("Empty Bag: 0")
-    local msBagLbl= secInv:Label("MS Bag: 0")
+    -- Inventory display
+    local secInv   = pageAutoMS:Section({Name="Inventory", Side=1})
+    local waterLbl = secInv:Label("Water: 0")
+    local gelLbl   = secInv:Label("Gelatin: 0")
+    local sugLbl   = secInv:Label("Sugar: 0")
+    local bagLbl   = secInv:Label("Empty Bag: 0")
+    local msBagLbl = secInv:Label("MS Bag: 0")
 
-    local secFullyStat  = pageAutoFully:Section({Name="Status",Side=1})
+    -- Auto Fully status
+    local secFullyStat  = pageAutoFully:Section({Name="Status", Side=1})
     local _fullyStatLbl = secFullyStat:Label("Belum dimulai")
-    local secFullyCtrl  = pageAutoFully:Section({Name="Kontrol",Side=1})
-    local afApartList = {
+
+    -- Auto Fully controls
+    local secFullyCtrl = pageAutoFully:Section({Name="Kontrol", Side=1})
+    local afApartList  = {
         {name="Apart 1",x=1141.8,  y=11.041,z=450.351},
         {name="Apart 2",x=1142.488,y=11.038,z=421.638},
         {name="Apart 3",x=984.088, y=11.029,z=248.808},
@@ -1137,11 +1115,15 @@ do
         {name="Apart 6",x=896.86,  y=11.042,z=38.65}
     }
     local apartNames={}; for _,a in ipairs(afApartList) do table.insert(apartNames,a.name) end
-    secFullyCtrl:Dropdown({Name="Apart Tujuan",Items=apartNames,Default="Apart 1",Flag="FullyApart",
-        Callback=function(val) for _,a in ipairs(afApartList) do if a.name==val then S.fullySavedPos=Vector3.new(a.x,a.y,a.z); break end end end})
-    secFullyCtrl:Slider({Name="Target MS/Loop",Min=1,Max=50,Default=10,Flag="FullyTarget",Suffix=" MS",
+    secFullyCtrl:Dropdown({Name="Apart Tujuan", Items=apartNames, Default="Apart 1", Flag="FullyApart",
+        Callback=function(val)
+            for _,a in ipairs(afApartList) do
+                if a.name==val then S.fullySavedPos=Vector3.new(a.x,a.y,a.z); break end
+            end
+        end})
+    secFullyCtrl:Slider({Name="Target MS/Loop", Min=1, Max=50, Default=10, Flag="FullyTarget", Suffix=" MS",
         Callback=function(v) S.fullyTarget=v end})
-    secFullyCtrl:Button({Name="START Auto Fully",Callback=function()
+    secFullyCtrl:Button({Name="START Auto Fully", Callback=function()
         if S.fullyRunning then return end
         local ch=LocalPlayer.Character; local h=ch and ch:FindFirstChildOfClass("Humanoid")
         if h then S.lastHealth=h.Health end
@@ -1151,60 +1133,78 @@ do
             pcall(function() _fullyStatLbl:Set("Stopped") end)
         end)
     end})
-    secFullyCtrl:Button({Name="STOP Auto Fully",Callback=function()
-        S.fullyRunning=false; S.isRunning=false; S.AutoMS_Running=false; S.safeModeActive=false
+    secFullyCtrl:Button({Name="STOP Auto Fully", Callback=function()
+        S.fullyRunning   = false
+        S.isRunning      = false
+        S.AutoMS_Running = false
+        S.safeModeActive = false
         pcall(function() _fullyStatLbl:Set("Stopped") end)
     end})
 
-    local secSafeMode = pageAutoFully:Section({Name="Safe Mode",Side=2})
+    -- Safe Mode
+    local secSafeMode = pageAutoFully:Section({Name="Safe Mode", Side=2})
     local safeLblEl   = secSafeMode:Label("Safe Mode: OFF")
-    secSafeMode:Toggle({Name="Enable Safe Mode",Default=false,Flag="SafeMode",Callback=function(v)
-        S.safeMode=v
-        if v then
-            local ch=LocalPlayer.Character; local h=ch and ch:FindFirstChildOfClass("Humanoid")
-            if h then S.lastHealth=h.Health end
-            S.safeModeStatusLbl.Text="STANDBY"
-        else
-            S.safeModeActive=false; S.safeModeStatusLbl.Text="OFF"
-        end
-    end})
+    secSafeMode:Toggle({Name="Enable Safe Mode", Default=false, Flag="SafeMode",
+        Callback=function(v)
+            S.safeMode=v
+            if v then
+                local ch=LocalPlayer.Character; local h=ch and ch:FindFirstChildOfClass("Humanoid")
+                if h then S.lastHealth=h.Health end
+                S.safeModeStatusLbl.Text = "STANDBY"
+            else
+                S.safeModeActive         = false
+                S.safeModeStatusLbl.Text = "OFF"
+            end
+        end})
 
-    local secAutoSell = pageSellBuy:Section({Name="Auto Sell",Side=1})
+    -- Auto Sell
+    local secAutoSell = pageSellBuy:Section({Name="Auto Sell", Side=1})
     local sellStatLbl = secAutoSell:Label("Status: OFF")
     local sellItemEl  = secAutoSell:Label("Item: -")
-    secAutoSell:Toggle({Name="Auto Sell",Default=false,Flag="AutoSellToggle",Callback=function(v)
-        S.autoSell_UI=v
-        if not v then S.asSelling=false; S.sellStatusLbl_ref.Text="OFF"; S.sellItemLbl_ref.Text="-"
-        else S.sellStatusLbl_ref.Text="ON" end
-    end})
-    secAutoSell:Button({Name="Jual Sekarang",Callback=function()
+    secAutoSell:Toggle({Name="Auto Sell", Default=false, Flag="AutoSellToggle",
+        Callback=function(v)
+            S.autoSell_UI=v
+            if not v then
+                S.asSelling              = false
+                S.sellStatusLbl_ref.Text = "OFF"
+                S.sellItemLbl_ref.Text   = "-"
+            else
+                S.sellStatusLbl_ref.Text = "ON"
+            end
+        end})
+    secAutoSell:Button({Name="Jual Sekarang", Callback=function()
         task.spawn(function()
-            S.doAutoSell(function(msg) S.sellStatusLbl_ref.Text=msg; S.sellItemLbl_ref.Text=msg end)
+            S.doAutoSell(function(msg)
+                S.sellStatusLbl_ref.Text = msg
+                S.sellItemLbl_ref.Text   = msg
+            end)
         end)
     end})
 
-    local secBuy  = pageSellBuy:Section({Name="Buy Bahan",Side=2})
+    -- Buy
+    local secBuy = pageSellBuy:Section({Name="Buy Bahan", Side=2})
     local buyW=1; local buyG=1; local buySu=1
-    secBuy:Slider({Name="Water",  Min=0,Max=50,Default=1,Suffix=" x",Callback=function(v) buyW=v  end})
-    secBuy:Slider({Name="Gelatin",Min=0,Max=50,Default=1,Suffix=" x",Callback=function(v) buyG=v  end})
-    secBuy:Slider({Name="Sugar",  Min=0,Max=50,Default=1,Suffix=" x",Callback=function(v) buySu=v end})
-    secBuy:Button({Name="Beli Sekarang",Callback=function()
+    secBuy:Slider({Name="Water",   Min=0, Max=50, Default=1, Suffix=" x", Callback=function(v) buyW=v   end})
+    secBuy:Slider({Name="Gelatin", Min=0, Max=50, Default=1, Suffix=" x", Callback=function(v) buyG=v   end})
+    secBuy:Slider({Name="Sugar",   Min=0, Max=50, Default=1, Suffix=" x", Callback=function(v) buySu=v  end})
+    secBuy:Button({Name="Beli Sekarang", Callback=function()
         task.spawn(function()
             S.buyQty[1]=buyG; S.buyQty[2]=buySu; S.buyQty[3]=buyW
             S.doAutoBuy(function(msg) pcall(function() sellStatLbl:Set(msg) end) end)
         end)
     end})
 
-    -- ================================================================
-    -- BUG FIX 4 (continued): Register ALL refs at once after all labels
-    -- are created. This is the single call that fixes status not updating.
-    -- ================================================================
+    -- Register ALL status refs at once after all labels are created (fixes status bug)
     S._regAllRefs(statusLbl, phaseLbl, timerLbl, safeLblEl, sellStatLbl, sellItemEl)
 
+    -- ============================================================
+    -- WORLD
+    -- ============================================================
     Window:Category("World")
-    local pageTP      = Window:Page({Name="Teleport",Icon="123944728972740"})
+    local pageTP      = Window:Page({Name="Teleport", Icon="123944728972740"})
     local pageVehicle = Window:Page({Name="Vehicle",  Icon="138827881557940"})
 
+    -- Teleport locations
     local tpLocs = {
         {name="Dealership",  x=732.117, y=3.362, z=406.08},
         {name="Jual/Beli MS",x=510.996, y=3.587, z=598.392},
@@ -1227,11 +1227,11 @@ do
         task.spawn(function()
             local hrp=char:WaitForChild("HumanoidRootPart",10); if not hrp then return end
             task.wait(1)
-            hrp.CFrame=CFrame.new(tpDestination.x,tpDestination.y+3,tpDestination.z)
+            hrp.CFrame=CFrame.new(tpDestination.x, tpDestination.y+3, tpDestination.z)
             tpDestination=nil
         end)
     end
-    if LocalPlayer.Character then task.spawn(onCharAdded,LocalPlayer.Character) end
+    if LocalPlayer.Character then task.spawn(onCharAdded, LocalPlayer.Character) end
     LocalPlayer.CharacterAdded:Connect(onCharAdded)
     local function tpTo(x,y,z)
         local ch=LocalPlayer.Character; local h=ch and ch:FindFirstChildOfClass("Humanoid")
@@ -1240,61 +1240,61 @@ do
     end
     local tpNames={}; for _,l in ipairs(tpLocs) do table.insert(tpNames,l.name) end
     local selTPIdx=1
-    local secTP=pageTP:Section({Name="Lokasi",Side=1})
-    secTP:Dropdown({Name="Lokasi",Items=tpNames,Default=tpNames[1],
+    local secTP=pageTP:Section({Name="Lokasi", Side=1})
+    secTP:Dropdown({Name="Lokasi", Items=tpNames, Default=tpNames[1],
         Callback=function(val) for i,l in ipairs(tpLocs) do if l.name==val then selTPIdx=i; break end end end})
-    secTP:Button({Name="Teleport!",Callback=function() local l=tpLocs[selTPIdx]; if l then tpTo(l.x,l.y,l.z) end end})
+    secTP:Button({Name="Teleport!", Callback=function()
+        local l=tpLocs[selTPIdx]; if l then tpTo(l.x,l.y,l.z) end
+    end})
 
-    local secTPP  = pageTP:Section({Name="TP ke Player",Side=2})
-    local plNames = {}; local selTPP=nil
+    -- TP to Player
+    -- ============================================================
+    -- BUG FIX 1: REFRESH PLAYER LIST
+    -- Problem: PlayerAdded retry loop was unreliable and selTPP
+    -- wasn't updating after refresh.
+    -- Fix: Simple 2s wait after PlayerAdded, direct dropdown update.
+    -- ============================================================
+    local secTPP  = pageTP:Section({Name="TP ke Player", Side=2})
+    local plNames = {}
+    local selTPP  = nil
 
-    -- ================================================================
-    -- BUG FIX 3: REFRESH LIST KADANG GA MUNCUL PAS ORANG BARU JOIN
-    -- Root cause: task.wait(0.5) after PlayerAdded is not enough time
-    -- for the player to fully load their name/character on slower servers.
-    -- FIX: Retry up to 5 times with 1s gaps until player name is valid.
-    -- Also auto-update dropdown immediately on join instead of only
-    -- updating when Refresh button is pressed.
-    -- ================================================================
     local function updPl()
-        plNames={}
-        for _,p in pairs(Players:GetPlayers()) do
-            if p~=LocalPlayer then table.insert(plNames,p.Name) end
+        plNames = {}
+        for _, p in pairs(Players:GetPlayers()) do
+            if p ~= LocalPlayer then table.insert(plNames, p.Name) end
         end
     end
     updPl()
-    local plDD=secTPP:Dropdown({Name="Player",Items=plNames,Default=plNames[1] or "-",
+
+    local plDD = secTPP:Dropdown({Name="Player", Items=plNames, Default=plNames[1] or "-",
         Callback=function(v) selTPP=v end})
 
-    -- FIX: retry loop for reliable PlayerAdded detection
     Players.PlayerAdded:Connect(function(plr)
         task.spawn(function()
-            for i=1,5 do
-                task.wait(1)
-                if plr and plr.Parent then
-                    updPl()
-                    pcall(function() plDD.Items=plNames end)
-                    if #plNames>0 and selTPP==nil then selTPP=plNames[1] end
-                    break
-                end
+            task.wait(2)
+            if plr and plr.Parent then
+                updPl()
+                pcall(function() plDD.Items=plNames end)
             end
         end)
     end)
     Players.PlayerRemoving:Connect(function()
-        task.wait(0.1); updPl(); pcall(function() plDD.Items=plNames end)
+        task.wait(0.3); updPl()
+        pcall(function() plDD.Items=plNames end)
     end)
 
-    secTPP:Button({Name="Refresh",Callback=function()
-        updPl(); pcall(function() plDD.Items=plNames end)
+    secTPP:Button({Name="Refresh", Callback=function()
+        updPl()
+        pcall(function() plDD.Items=plNames end)
         if #plNames>0 then selTPP=plNames[1] else selTPP=nil end
     end})
-    secTPP:Button({Name="TP ke Player",Callback=function()
+    secTPP:Button({Name="TP ke Player", Callback=function()
         if not selTPP or selTPP=="-" then return end
         for _,p in pairs(Players:GetPlayers()) do
             if p.Name==selTPP then
                 local t=p.Character and p.Character:FindFirstChild("HumanoidRootPart")
                 if t then
-                    tpDestination={x=t.Position.X+2,y=t.Position.Y,z=t.Position.Z}
+                    tpDestination={x=t.Position.X+2, y=t.Position.Y, z=t.Position.Z}
                     tpPending=true
                     local c=LocalPlayer.Character; local h=c and c:FindFirstChildOfClass("Humanoid")
                     if c and h and h.Health>0 then h.Health=0 end
@@ -1304,6 +1304,7 @@ do
         end
     end})
 
+    -- Vehicle TP
     local cachedSeat=nil
     local function updSeat()
         local ch=LocalPlayer.Character; if not ch then cachedSeat=nil; return end
@@ -1319,7 +1320,7 @@ do
         local h=c:WaitForChild("Humanoid",10); if not h then return end
         h:GetPropertyChangedSignal("SeatPart"):Connect(updSeat); updSeat()
     end
-    if LocalPlayer.Character then task.spawn(hookVC,LocalPlayer.Character) end
+    if LocalPlayer.Character then task.spawn(hookVC, LocalPlayer.Character) end
     LocalPlayer.CharacterAdded:Connect(function(c) task.spawn(hookVC,c) end)
     local function tpVehicle(x,y,z)
         task.spawn(function()
@@ -1358,26 +1359,34 @@ do
     }
     local vtpNames={}; for _,l in ipairs(vtpLocs) do table.insert(vtpNames,l.name) end
     local selVTP=1
-    local secVTP=pageVehicle:Section({Name="Vehicle TP",Side=1})
-    secVTP:Dropdown({Name="Lokasi",Items=vtpNames,Default=vtpNames[1],
+    local secVTP=pageVehicle:Section({Name="Vehicle TP", Side=1})
+    secVTP:Dropdown({Name="Lokasi", Items=vtpNames, Default=vtpNames[1],
         Callback=function(val) for i,l in ipairs(vtpLocs) do if l.name==val then selVTP=i; break end end end})
-    secVTP:Button({Name="TP Kendaraan!",Callback=function() local l=vtpLocs[selVTP]; if l then tpVehicle(l.x,l.y,l.z) end end})
+    secVTP:Button({Name="TP Kendaraan!", Callback=function()
+        local l=vtpLocs[selVTP]; if l then tpVehicle(l.x,l.y,l.z) end
+    end})
 
-    local secVFly=pageVehicle:Section({Name="Vehicle Fly",Side=2})
-    secVFly:Toggle({Name="Vehicle Fly",Default=false,Flag="VehicleFly",
+    -- Vehicle Fly
+    local secVFly=pageVehicle:Section({Name="Vehicle Fly", Side=2})
+    secVFly:Toggle({Name="Vehicle Fly", Default=false, Flag="VehicleFly",
         Callback=function(v) S.vFlyOn=v; if v then S.vFlyStart() else S.vFlyStop() end end})
-    secVFly:Slider({Name="Speed",Min=10,Max=200,Default=60,Suffix=" st/s",Callback=function(v) S.vFlySpd=v end})
+    secVFly:Slider({Name="Speed", Min=10, Max=200, Default=60, Suffix=" st/s",
+        Callback=function(v) S.vFlySpd=v end})
     secVFly:Label("WASD = Move | E = Up | Q = Down")
 
+    -- ============================================================
+    -- COMBAT
+    -- ============================================================
     Window:Category("Combat")
-    local pageAimbot=Window:Page({Name="Aimbot",Icon="134236649319095"})
-    local secAim=pageAimbot:Section({Name="Aimbot",Side=1})
-    secAim:Toggle({Name="Enable Aimbot",Default=false,Flag="AimbotToggle",
+    local pageAimbot = Window:Page({Name="Aimbot", Icon="134236649319095"})
+    local secAim     = pageAimbot:Section({Name="Aimbot", Side=1})
+
+    secAim:Toggle({Name="Enable Aimbot", Default=false, Flag="AimbotToggle",
         Callback=function(v) S.aimOn=v; if not v then S.aimToggle=false end end})
 
     local defaultKeyName = S.aimKey and S.aimKey.Name or "None"
-    local aimKeyLbl=secAim:Label("Aim Key: ["..defaultKeyName.."]")
-    secAim:Button({Name="Set Aim Key",Callback=function()
+    local aimKeyLbl      = secAim:Label("Aim Key: ["..defaultKeyName.."]")
+    secAim:Button({Name="Set Aim Key", Callback=function()
         S.aimCapturing=true; pcall(function() aimKeyLbl:Set(">> PRESS ANY KEY <<") end)
         task.wait()
         local capConn
@@ -1402,48 +1411,55 @@ do
         end)
     end})
 
-    secAim:Dropdown({Name="Mode",  Default="Hold",  Items={"Hold","Toggle"},   Callback=function(v) S.aimKBMode=v; S.aimToggle=false end})
-    secAim:Dropdown({Name="Method",Default="Camera",Items={"Camera","FreeAim"},Callback=function(v) S.aimMode=v end})
+    secAim:Dropdown({Name="Mode",   Default="Hold",   Items={"Hold","Toggle"},    Callback=function(v) S.aimKBMode=v; S.aimToggle=false end})
+    secAim:Dropdown({Name="Method", Default="Camera",  Items={"Camera","FreeAim"}, Callback=function(v) S.aimMode=v end})
 
-    local secTgt=pageAimbot:Section({Name="Target",Side=2})
-    secTgt:Dropdown({Name="Target Part",Default="Head",     Items={"Head","HumanoidRootPart"},Callback=function(v) S.aimPart=v end})
-    secTgt:Dropdown({Name="Priority",   Default="Crosshair",Items={"Crosshair","Distance"},   Callback=function(v) S.aimPriority=v end})
-    secTgt:Slider({Name="Max Distance",Min=0,Max=2000,Default=1000,Suffix=" st",Callback=function(v) S.aimMaxDist=v end})
+    local secTgt=pageAimbot:Section({Name="Target", Side=2})
+    secTgt:Dropdown({Name="Target Part", Default="Head",      Items={"Head","HumanoidRootPart"}, Callback=function(v) S.aimPart=v end})
+    secTgt:Dropdown({Name="Priority",    Default="Crosshair", Items={"Crosshair","Distance"},   Callback=function(v) S.aimPriority=v end})
+    secTgt:Slider({Name="Max Distance",  Min=0, Max=2000, Default=1000, Suffix=" st",           Callback=function(v) S.aimMaxDist=v end})
 
-    local secFOV=pageAimbot:Section({Name="FOV Circle",Side=1})
-    secFOV:Slider({Name="FOV Radius",Min=20,Max=800,Default=250,Suffix=" px",Callback=function(v) S.aimFOV=v end})
+    local secFOV=pageAimbot:Section({Name="FOV Circle", Side=1})
+    secFOV:Slider({Name="FOV Radius", Min=20, Max=800, Default=250, Suffix=" px",
+        Callback=function(v) S.aimFOV=v end})
     local fovColLbl=secFOV:Label("Circle Color")
-    fovColLbl:Colorpicker({Name="Color",Default=Color3.fromRGB(0,196,255),Callback=function(v) S.aimFovCol=v end})
+    fovColLbl:Colorpicker({Name="Color", Default=Color3.fromRGB(0,196,255),
+        Callback=function(v) S.aimFovCol=v end})
 
-    local secSmooth=pageAimbot:Section({Name="Smoothing",Side=2})
-    secSmooth:Slider({Name="Smoothness",  Min=0,Max=20,Default=5,    Suffix="",   Callback=function(v) S.aimSmooth=v   end})
-    secSmooth:Toggle({Name="Prediction",  Default=false,Flag="AimbotPrediction",  Callback=function(v) S.aimPred=v    end})
-    secSmooth:Slider({Name="Pred Strength",Min=0,Max=1,Default=0.165,Decimals=3,Suffix="",Callback=function(v) S.aimPredStr=v end})
+    local secSmooth=pageAimbot:Section({Name="Smoothing", Side=2})
+    secSmooth:Slider({Name="Smoothness",   Min=0, Max=20, Default=5,     Suffix="",     Callback=function(v) S.aimSmooth=v   end})
+    secSmooth:Toggle({Name="Prediction",   Default=false, Flag="AimbotPrediction",      Callback=function(v) S.aimPred=v    end})
+    secSmooth:Slider({Name="Pred Strength",Min=0, Max=1,  Default=0.165, Decimals=3, Suffix="", Callback=function(v) S.aimPredStr=v end})
 
+    -- ============================================================
+    -- VISUALS
+    -- ============================================================
     Window:Category("Visuals")
-    local pageESP=Window:Page({Name="ESP",       Icon="100050851789190"})
-    local pageWL =Window:Page({Name="Whitelist", Icon="123554105934637"})
+    local pageESP = Window:Page({Name="ESP",       Icon="100050851789190"})
+    local pageWL  = Window:Page({Name="Whitelist", Icon="123554105934637"})
 
-    local secESP=pageESP:Section({Name="Player ESP",Side=1})
-    secESP:Toggle({Name="Enable ESP",               Default=false,Flag="ESPEnabled",  Callback=function(v) S.ESP_ENABLED=v  end})
-    secESP:Toggle({Name="Skeleton ESP (CPU comsume)", Default=false,Flag="SkeletonESP", Callback=function(v) S.ESP_SKELETON=v end})
-    secESP:Slider({Name="Max Distance",Min=50,Max=2000,Default=500,Suffix=" st",      Callback=function(v) S.ESP_MAX_DIST=v end})
+    local secESP=pageESP:Section({Name="Player ESP", Side=1})
+    secESP:Toggle({Name="Enable ESP",                 Default=false, Flag="ESPEnabled",  Callback=function(v) S.ESP_ENABLED=v  end})
+    secESP:Toggle({Name="Skeleton ESP (CPU comsume)", Default=false, Flag="SkeletonESP", Callback=function(v) S.ESP_SKELETON=v end})
+    secESP:Slider({Name="Max Distance", Min=50, Max=2000, Default=500, Suffix=" st",    Callback=function(v) S.ESP_MAX_DIST=v end})
 
-    local secESPOpt=pageESP:Section({Name="Options",Side=2})
-    local boxColorLbl=secESPOpt:Label("Box Color")
-    boxColorLbl:Colorpicker({Name="BoxColor",Default=Color3.fromRGB(0,255,255),
+    local secESPOpt  = pageESP:Section({Name="Options", Side=2})
+    local boxColorLbl = secESPOpt:Label("Box Color")
+    boxColorLbl:Colorpicker({Name="BoxColor", Default=Color3.fromRGB(0,255,255),
         Callback=function(v) S.ESP_BOX_COLOR=v; if S.updateESPColor then S.updateESPColor(v) end end})
     secESPOpt:Label("Shows: Box, Name, HP,")
     secESPOpt:Label("Distance, Tool, Skeleton")
 
-    local secWL=pageWL:Section({Name="Whitelist",Side=1})
+    -- Whitelist
+    local secWL = pageWL:Section({Name="Whitelist", Side=1})
     secWL:Label("Ignored by ESP & Aimbot")
     local function getWLText()
         local n={}; for nm in pairs(S.whitelist) do table.insert(n,nm) end
         return #n==0 and "None" or table.concat(n,", ")
     end
-    local wlLbl=secWL:Label("Whitelisted: None")
-    local wlPN={}; local selWL=nil
+    local wlLbl = secWL:Label("Whitelisted: None")
+    local wlPN  = {}
+    local selWL = nil
     local function updateWL()
         wlPN={}
         for _,p in pairs(Players:GetPlayers()) do
@@ -1451,32 +1467,37 @@ do
         end
     end
     updateWL()
-    local wlDD=secWL:Dropdown({Name="Player",Items=wlPN,Default=wlPN[1] or "-",Callback=function(v) selWL=v end})
-    secWL:Button({Name="Refresh List",Callback=function()
+    local wlDD=secWL:Dropdown({Name="Player", Items=wlPN, Default=wlPN[1] or "-",
+        Callback=function(v) selWL=v end})
+    secWL:Button({Name="Refresh List", Callback=function()
         updateWL(); pcall(function() wlDD.Items=wlPN end)
         if #wlPN>0 then selWL=wlPN[1] else selWL=nil end
     end})
-    secWL:Button({Name="Add",     Callback=function() if not selWL or selWL=="-" then return end; S.whitelist[selWL]=true;  updateWL(); wlLbl:Set("WL: "..getWLText()) end})
-    secWL:Button({Name="Remove",  Callback=function() if not selWL or selWL=="-" then return end; S.whitelist[selWL]=nil;   updateWL(); wlLbl:Set("WL: "..getWLText()) end})
+    secWL:Button({Name="Add",      Callback=function() if not selWL or selWL=="-" then return end; S.whitelist[selWL]=true;  updateWL(); wlLbl:Set("WL: "..getWLText()) end})
+    secWL:Button({Name="Remove",   Callback=function() if not selWL or selWL=="-" then return end; S.whitelist[selWL]=nil;   updateWL(); wlLbl:Set("WL: "..getWLText()) end})
     secWL:Button({Name="Clear All",Callback=function() S.whitelist={}; updateWL(); wlLbl:Set("WL: None") end})
-    -- Whitelist auto-refresh also uses retry loop
     Players.PlayerAdded:Connect(function(plr)
         task.spawn(function()
-            for i=1,5 do
-                task.wait(1)
-                if plr and plr.Parent then updateWL(); pcall(function() wlDD.Items=wlPN end); break end
-            end
+            task.wait(2)
+            if plr and plr.Parent then updateWL(); pcall(function() wlDD.Items=wlPN end) end
         end)
     end)
-    Players.PlayerRemoving:Connect(function() task.wait(0.1); updateWL(); pcall(function() wlDD.Items=wlPN end) end)
+    Players.PlayerRemoving:Connect(function()
+        task.wait(0.3); updateWL(); pcall(function() wlDD.Items=wlPN end)
+    end)
 
+    -- ============================================================
+    -- INIT + RUNTIME LOOPS
+    -- ============================================================
     task.defer(function()
         Window:Init()
 
-        -- Inventory update loop — runs every 1s, uses cached countItem (fast)
+        -- FIX 3: Force inventory cache rebuild every second so display
+        -- is always fresh regardless of event-based dirty flags.
         task.spawn(function()
             while true do
                 task.wait(1)
+                S.markInvDirty()
                 pcall(function()
                     waterLbl:Set("Water: "  ..S.countItem("Water"))
                     gelLbl:Set("Gelatin: "  ..S.countItem("Gelatin"))
@@ -1489,7 +1510,7 @@ do
 
         Library:Notification({
             Title       = "Phantom.wtf",
-            Description = "Loaded! Have fun using our scripts!.",
+            Description = "Loaded! Have fun using our scripts!",
             Duration    = 5,
             Icon        = "135215559087473"
         })
