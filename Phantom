@@ -37,9 +37,8 @@ S.whitelist = {}
 
 -- ================================================================
 -- ESP SYSTEM
--- Runs on Heartbeat (30fps cap) so it doesn't compete with aimbot.
--- Hide-once pattern: only calls hide() when _vis flag is true,
--- preventing redundant write spam that caused blink.
+-- Runs on Heartbeat at 30fps cap — doesn't compete with aimbot.
+-- Hide-once prevents blink. Char-change detection avoids stale boxes.
 -- ================================================================
 do
     S.ESP_ENABLED   = false
@@ -55,7 +54,7 @@ do
         {"LowerTorso","LeftFoot"}, {"LowerTorso","RightFoot"},
     }
     local R6FB = {
-        UpperTorso="Torso", LowerTorso="Torso",
+        UpperTorso="Torso",  LowerTorso="Torso",
         LeftHand="Left Arm", RightHand="Right Arm",
         LeftFoot="Left Leg", RightFoot="Right Leg",
     }
@@ -65,11 +64,11 @@ do
         for i = 1, 4 do
             if d[i] then d[i][1].Visible=false; d[i][2].Visible=false end
         end
-        if d.Name   then d.Name.Visible=false   end
-        if d.Dist   then d.Dist.Visible=false   end
-        if d.Item   then d.Item.Visible=false   end
-        if d.HPBg   then d.HPBg.Visible=false   end
-        if d.HPFill then d.HPFill.Visible=false end
+        if d.Name   then d.Name.Visible   = false end
+        if d.Dist   then d.Dist.Visible   = false end
+        if d.Item   then d.Item.Visible   = false end
+        if d.HPBg   then d.HPBg.Visible   = false end
+        if d.HPFill then d.HPFill.Visible = false end
         if d.Bones  then for i=1,#d.Bones do d.Bones[i].Visible=false end end
         d._vis = false
     end
@@ -139,21 +138,22 @@ do
         local d = ESP_OBJ[plr]; if not d then return end
         local char = plr.Character
         if not char or not char.Parent then hide(d); return end
+
         if d._char ~= char then
-            d._char=char; d._hum=char:FindFirstChildOfClass("Humanoid"); d._hrp=getPart(char,"HumanoidRootPart"); hide(d)
+            d._char=char; d._hum=char:FindFirstChildOfClass("Humanoid")
+            d._hrp=getPart(char,"HumanoidRootPart"); hide(d)
         end
         local hum=d._hum; local hrp=d._hrp
         if not hum or not hum.Parent then d._hum=char:FindFirstChildOfClass("Humanoid"); hum=d._hum end
         if not hrp or not hrp.Parent then d._hrp=getPart(char,"HumanoidRootPart"); hrp=d._hrp end
+
         if not hum or hum.Health<=0 or not hrp then hide(d); return end
         if S.whitelist[plr.Name] then hide(d); return end
 
         local dist3D = (hrp.Position - myHRP.Position).Magnitude
         if S.ESP_MAX_DIST > 0 and dist3D > S.ESP_MAX_DIST then hide(d); return end
 
-        local head = getPart(char, "Head")
-        if not head then hide(d); return end
-
+        local head = getPart(char, "Head"); if not head then hide(d); return end
         local headPos = head.Position + Vector3.new(0, 0.5, 0)
         local rootPos = hrp.Position  - Vector3.new(0, 3,   0)
         local headSP, onSc1 = cam:WorldToViewportPoint(headPos)
@@ -166,10 +166,10 @@ do
         if h < 4 then hide(d); return end
 
         local centerX = (headSP.X + rootSP.X) * 0.5
-        local w  = h * 0.6
-        local bx = centerX - w * 0.5
-        local by = topY
-        local vs = cam.ViewportSize
+        local w       = h * 0.6
+        local bx      = centerX - w * 0.5
+        local by      = topY
+        local vs      = cam.ViewportSize
         if bx+w < -300 or bx > vs.X+300 or by+h < -300 or by > vs.Y+300 then hide(d); return end
 
         local col = plr.Team and plr.Team.TeamColor.Color or S.ESP_BOX_COLOR
@@ -195,13 +195,13 @@ do
             if d.Item.Visible then d.Item.Visible=false end
         end
 
-        local r  = math.clamp(hum.Health/math.max(hum.MaxHealth,1),0,1)
-        local hh = math.max(2,h*r)
-        local hx = bx-5
+        local r   = math.clamp(hum.Health/math.max(hum.MaxHealth,1),0,1)
+        local hh  = math.max(2, h*r)
+        local hx  = bx - 5
         d.HPBg.Size=Vector2.new(2,h); d.HPBg.Position=Vector2.new(hx,by); d.HPBg.Visible=true
         d.HPFill.Size=Vector2.new(2,hh); d.HPFill.Position=Vector2.new(hx,by+h-hh)
         d.HPFill.Color = r>0.6 and Color3.fromRGB(0,255,80) or r>0.3 and Color3.fromRGB(255,200,0) or Color3.fromRGB(255,50,50)
-        d.HPFill.Visible=true
+        d.HPFill.Visible = true
 
         if S.ESP_SKELETON then
             for i=1,#BONES do
@@ -242,13 +242,13 @@ do
         end
     end)
 
-    for _,plr in pairs(Players:GetPlayers()) do task.defer(create,plr) end
-    Players.PlayerAdded:Connect(function(plr) task.defer(create,plr) end)
+    for _,plr in pairs(Players:GetPlayers()) do task.defer(create, plr) end
+    Players.PlayerAdded:Connect(function(plr) task.defer(create, plr) end)
     Players.PlayerRemoving:Connect(remove)
 end
 
 -- ================================================================
--- VEHICLE FLY (E = UP, Q = DOWN)
+-- VEHICLE FLY (E = UP, Q = DOWN — cached parts system)
 -- ================================================================
 do
     S.vFlyOn  = false
@@ -257,35 +257,35 @@ do
     local up   = false
     local dn   = false
 
-    UserInputService.InputBegan:Connect(function(inp,gpe)
+    UserInputService.InputBegan:Connect(function(inp, gpe)
         if not S.vFlyOn or gpe then return end
-        if inp.KeyCode==Enum.KeyCode.E then up=true end
-        if inp.KeyCode==Enum.KeyCode.Q then dn=true end
+        if inp.KeyCode == Enum.KeyCode.E then up = true end
+        if inp.KeyCode == Enum.KeyCode.Q then dn = true end
     end)
     UserInputService.InputEnded:Connect(function(inp)
-        if inp.KeyCode==Enum.KeyCode.E then up=false end
-        if inp.KeyCode==Enum.KeyCode.Q then dn=false end
+        if inp.KeyCode == Enum.KeyCode.E then up = false end
+        if inp.KeyCode == Enum.KeyCode.Q then dn = false end
     end)
 
     local function start()
-        if conn then conn:Disconnect(); conn=nil end
-        local vPartsCache={}; local lastModel=nil
+        if conn then conn:Disconnect(); conn = nil end
+        local vPartsCache = {}; local lastModel = nil
         conn = RunService.RenderStepped:Connect(function(dt)
-            local ch=LocalPlayer.Character; if not ch then return end
-            local hm=ch:FindFirstChildOfClass("Humanoid"); if not hm then return end
-            local seat=hm.SeatPart; if not seat then return end
-            local mdl=seat:FindFirstAncestorOfClass("Model") or seat
-            if mdl~=lastModel then
+            local ch   = LocalPlayer.Character; if not ch then return end
+            local hm   = ch:FindFirstChildOfClass("Humanoid"); if not hm then return end
+            local seat = hm.SeatPart; if not seat then return end
+            local mdl  = seat:FindFirstAncestorOfClass("Model") or seat
+            if mdl ~= lastModel then
                 lastModel=mdl; vPartsCache={}
                 if mdl then for _,p in pairs(mdl:GetDescendants()) do if p:IsA("BasePart") then table.insert(vPartsCache,p) end end end
             end
-            local root=mdl.PrimaryPart or seat
-            local cf=Camera.CFrame
-            local fwd=Vector3.new(cf.LookVector.X,0,cf.LookVector.Z)
+            local root = mdl.PrimaryPart or seat
+            local cf   = Camera.CFrame
+            local fwd  = Vector3.new(cf.LookVector.X,0,cf.LookVector.Z)
             if fwd.Magnitude>0.01 then fwd=fwd.Unit else fwd=Vector3.new(0,0,-1) end
-            local rgt=Vector3.new(cf.RightVector.X,0,cf.RightVector.Z)
+            local rgt  = Vector3.new(cf.RightVector.X,0,cf.RightVector.Z)
             if rgt.Magnitude>0.01 then rgt=rgt.Unit else rgt=Vector3.new(1,0,0) end
-            local mv=Vector3.zero
+            local mv = Vector3.zero
             if UserInputService:IsKeyDown(Enum.KeyCode.W) then mv=mv+fwd end
             if UserInputService:IsKeyDown(Enum.KeyCode.S) then mv=mv-fwd end
             if UserInputService:IsKeyDown(Enum.KeyCode.A) then mv=mv-rgt end
@@ -296,7 +296,7 @@ do
                 local p=vPartsCache[i]
                 pcall(function() p.AssemblyLinearVelocity=Vector3.zero; p.AssemblyAngularVelocity=Vector3.zero end)
             end
-            if mv.Magnitude>0 then
+            if mv.Magnitude > 0 then
                 mv=mv.Unit
                 local np=root.Position+mv*S.vFlySpd*dt
                 local ld=Vector3.new(cf.LookVector.X,0,cf.LookVector.Z)
@@ -313,13 +313,15 @@ do
         if conn then conn:Disconnect(); conn=nil end
         up=false; dn=false
     end
-    S.vFlyStart=start; S.vFlyStop=stop
+    S.vFlyStart = start
+    S.vFlyStop  = stop
 end
 
 -- ================================================================
 -- AIMBOT
--- FIX 7: Improved key capture — ignores gpe flag during capture
--- so menu clicks don't interfere, and Unknown keycodes are skipped.
+-- FIX: Aim key system taken from Majesty — click button → "..." →
+-- press any key (RMB, MMB, MB4, MB5, or keyboard) → sets key.
+-- Supports full MB4/MB5 via held state trackers.
 -- ================================================================
 do
     S.aimOn       = false
@@ -332,31 +334,93 @@ do
     S.aimPriority = "Crosshair"
     S.aimMaxDist  = 500
     S.aimFovCol   = Color3.fromRGB(0,196,255)
-    S.aimKey      = _G.PhantomConfig.DefaultAimKey
-    S.aimRC       = false
-    S.aimLC       = false
-    S.aimKBMode   = "Hold"
-    S.aimToggle   = false
-    S.aimCapturing= false
 
-    -- FIX 7: Expose label updater so button can update it directly
+    -- Keybind state (Majesty system: type + payload + label)
+    S.aimKBType  = "MouseButton"                     -- "KeyCode"|"MouseButton"|"MB4"|"MB5"
+    S.aimKBBtn   = Enum.UserInputType.MouseButton2   -- for MouseButton type
+    S.aimKBCode  = nil                               -- for KeyCode type
+    S.aimKBLabel = "RMB"                             -- display text
+    S.isBindingKey = false
+
+    -- MB4 / MB5 held-state trackers (these cannot be polled directly)
+    local mb4Held = false
+    local mb5Held = false
+
+    UserInputService.InputBegan:Connect(function(input)
+        local kn = tostring(input.KeyCode):gsub("Enum%.KeyCode%.","")
+        local un = tostring(input.UserInputType):gsub("Enum%.UserInputType%.","")
+        if kn=="MouseButton4" or un=="MouseButton4" then mb4Held=true end
+        if kn=="MouseButton5" or un=="MouseButton5" then mb5Held=true end
+    end)
+    UserInputService.InputEnded:Connect(function(input)
+        local kn = tostring(input.KeyCode):gsub("Enum%.KeyCode%.","")
+        local un = tostring(input.UserInputType):gsub("Enum%.UserInputType%.","")
+        if kn=="MouseButton4" or un=="MouseButton4" then mb4Held=false end
+        if kn=="MouseButton5" or un=="MouseButton5" then mb5Held=false end
+    end)
+
+    -- Exposed for GUI label updater
     S._aimKeyLblSet = nil
 
-    local velCache  = {}
-    local aimCircle = Drawing.new("Circle")
-    aimCircle.Thickness=1.5; aimCircle.Filled=false; aimCircle.Transparency=0.75
-    aimCircle.NumSides=64; aimCircle.Color=S.aimFovCol; aimCircle.Visible=false
-    S.aimCircle = aimCircle
+    -- Majesty-style key capture: global InputBegan handler
+    -- Click button → S.isBindingKey=true → next non-LMB input captured
+    UserInputService.InputBegan:Connect(function(input, _gpe)
+        if not S.isBindingKey then return end
+        -- Ignore LMB (used to click the Set Key button)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then return end
 
-    local function getDisplay()
-        if S.aimRC then return "Right Click" end
-        if S.aimLC then return "Left Click" end
-        if S.aimKey then return S.aimKey.Name end
-        return "None"
+        local kn = tostring(input.KeyCode):gsub("Enum%.KeyCode%.","")
+        local un = tostring(input.UserInputType):gsub("Enum%.UserInputType%.","")
+
+        if un == "MouseButton2" then
+            S.aimKBType="MouseButton"; S.aimKBBtn=Enum.UserInputType.MouseButton2; S.aimKBCode=nil; S.aimKBLabel="RMB"
+        elseif un == "MouseButton3" then
+            S.aimKBType="MouseButton"; S.aimKBBtn=Enum.UserInputType.MouseButton3; S.aimKBCode=nil; S.aimKBLabel="MMB"
+        elseif un == "MouseButton4" or kn == "MouseButton4" then
+            S.aimKBType="MB4"; S.aimKBBtn=nil; S.aimKBCode=nil; S.aimKBLabel="MB4"
+        elseif un == "MouseButton5" or kn == "MouseButton5" then
+            S.aimKBType="MB5"; S.aimKBBtn=nil; S.aimKBCode=nil; S.aimKBLabel="MB5"
+        elseif un == "Keyboard" and kn ~= "Unknown" and input.KeyCode ~= Enum.KeyCode.Unknown then
+            S.aimKBType="KeyCode"; S.aimKBCode=input.KeyCode; S.aimKBBtn=nil; S.aimKBLabel=kn
+        else
+            return -- unrecognised, keep listening
+        end
+
+        S.isBindingKey = false
+        if S._aimKeyLblSet then pcall(S._aimKeyLblSet, "Aim Key: ["..S.aimKBLabel.."]") end
+    end)
+
+    -- isAimHeld: reads live S.aimKBType/S.aimKBCode/S.aimKBBtn each frame
+    local function isAimHeld()
+        if S.isBindingKey then return false end
+        if S.aimKBType == "KeyCode"     then return S.aimKBCode  and UserInputService:IsKeyDown(S.aimKBCode) end
+        if S.aimKBType == "MouseButton" then
+            if S.aimKBBtn == Enum.UserInputType.MouseButton2 then return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) end
+            if S.aimKBBtn == Enum.UserInputType.MouseButton3 then return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton3) end
+        end
+        if S.aimKBType == "MB4" then return mb4Held end
+        if S.aimKBType == "MB5" then return mb5Held end
+        return false
     end
-    S.aimGetDisplay = getDisplay
 
-    local function getPredPos(part,player)
+    S.aimKBMode  = "Hold"
+    S.aimToggle  = false
+
+    UserInputService.InputBegan:Connect(function(input, gpe)
+        if gpe or S.isBindingKey then return end
+        if S.aimOn and S.aimKBMode == "Toggle" then
+            local trig = false
+            if S.aimKBType=="MouseButton" then
+                if S.aimKBBtn==Enum.UserInputType.MouseButton2 and input.UserInputType==Enum.UserInputType.MouseButton2 then trig=true end
+                if S.aimKBBtn==Enum.UserInputType.MouseButton3 and input.UserInputType==Enum.UserInputType.MouseButton3 then trig=true end
+            elseif S.aimKBType=="KeyCode" and S.aimKBCode and input.KeyCode==S.aimKBCode then trig=true end
+            if trig then S.aimToggle=not S.aimToggle end
+        end
+    end)
+
+    local velCache = {}
+
+    local function getPredPos(part, player)
         local now=tick(); local cur=part.Position
         if not velCache[player] then velCache[player]={lastPos=cur,lastVel=Vector3.zero,lastTime=now}; return cur end
         local c=velCache[player]; local dt=now-c.lastTime
@@ -390,24 +454,15 @@ do
     end
 
     local function shouldAim()
-        if not S.aimOn or S.aimCapturing then return false end
+        if not S.aimOn or S.isBindingKey then return false end
         if S.aimKBMode=="Toggle" then return S.aimToggle end
-        if S.aimRC then return UserInputService:IsMouseButtonPressed(Enum.MouseButton2) end
-        if S.aimLC then return UserInputService:IsMouseButtonPressed(Enum.MouseButton1) end
-        if S.aimKey then return UserInputService:IsKeyDown(S.aimKey) end
-        return false
+        return isAimHeld()
     end
 
-    UserInputService.InputBegan:Connect(function(input,gpe)
-        if gpe or S.aimCapturing then return end
-        if S.aimOn and S.aimKBMode=="Toggle" then
-            local trig=false
-            if S.aimRC and input.UserInputType==Enum.UserInputType.MouseButton2 then trig=true end
-            if S.aimLC and input.UserInputType==Enum.UserInputType.MouseButton1 then trig=true end
-            if S.aimKey and input.KeyCode==S.aimKey then trig=true end
-            if trig then S.aimToggle=not S.aimToggle end
-        end
-    end)
+    local aimCircle = Drawing.new("Circle")
+    aimCircle.Thickness=1.5; aimCircle.Filled=false; aimCircle.Transparency=0.75
+    aimCircle.NumSides=64; aimCircle.Color=S.aimFovCol; aimCircle.Visible=false
+    S.aimCircle = aimCircle
 
     local mmMethod=nil; pcall(function() if mousemoverel then mmMethod="rel" end end)
     local function moveRel(dx,dy)
@@ -415,7 +470,7 @@ do
         else local mmp=UserInputService:GetMouseLocation(); pcall(function() VIM:SendMouseMoveEvent(mmp.X+dx,mmp.Y+dy,false) end) end
     end
 
-    local _fpX,_fpY,_fRC=0,0,250
+    local _fpX,_fpY,_fRC = 0,0,250
     RunService:BindToRenderStep("PhantomAimbot",201,function(dt)
         local vs=Camera.ViewportSize; local mp=UserInputService:GetMouseLocation()
         local tcX=S.aimMode=="FreeAim" and mp.X or vs.X*0.5
@@ -449,30 +504,6 @@ do
             end
         end
     end)
-
-    -- FIX 7: Global capture connection (always listening, not re-created per-click).
-    -- This avoids the race condition where the local capConn missed inputs.
-    UserInputService.InputBegan:Connect(function(input, _gpe)
-        if not S.aimCapturing then return end
-        -- Allow capture even if gpe=true (menu is open), skip only LMB
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then return end
-
-        local captured = false
-        if input.UserInputType == Enum.UserInputType.MouseButton2 then
-            S.aimRC=true; S.aimLC=false; S.aimKey=nil
-            if S._aimKeyLblSet then pcall(S._aimKeyLblSet,"Aim Key: [Right Click]") end
-            captured=true
-        elseif input.UserInputType == Enum.UserInputType.MouseButton3 then
-            S.aimRC=false; S.aimLC=false; S.aimKey=nil
-            if S._aimKeyLblSet then pcall(S._aimKeyLblSet,"Aim Key: [Middle Click]") end
-            captured=true
-        elseif input.KeyCode ~= Enum.KeyCode.Unknown then
-            S.aimKey=input.KeyCode; S.aimRC=false; S.aimLC=false
-            if S._aimKeyLblSet then pcall(S._aimKeyLblSet,"Aim Key: ["..input.KeyCode.Name.."]") end
-            captured=true
-        end
-        if captured then S.aimCapturing=false; S.aimToggle=false end
-    end)
 end
 
 -- ================================================================
@@ -490,10 +521,10 @@ do
     S.lastHealth     = 100
     S.fullyRunning   = false
     S.fullyTarget    = 10
-    S.fullySavedPos  = Vector3.new(1141.8,11.041,450.351)
-    S.NPC_MS_POS     = Vector3.new(510.061,4.476,600.548)
-    S.SAFE_POS       = Vector3.new(120.854,4.297,-587.633)
-    S.patStats       = {small=0,medium=0,large=0}
+    S.fullySavedPos  = Vector3.new(1141.8, 11.041, 450.351)
+    S.NPC_MS_POS     = Vector3.new(510.061, 4.476, 600.548)
+    S.SAFE_POS       = Vector3.new(120.854, 4.297, -587.633)
+    S.patStats       = {small=0, medium=0, large=0}
     S.totalSold      = 0
     S.totalBuy       = 0
     S.rpcQueue       = {}
@@ -519,48 +550,37 @@ do
     }
 
     -- ============================================================
-    -- FIX 1: INVENTORY NOT READING
-    -- Root cause 1: Only counted Tool instances. Some items (Water,
-    --   Sugar Block Bag, etc.) sit in Backpack as non-Tool instances
-    --   in certain game versions.
-    -- Root cause 2: _invDirty was set by events but rebuildInvCache
-    --   wasn't being force-called in the display loop.
-    -- Fix: Scan ALL Backpack children by Name (not just Tools).
-    --   In character, still only count Tools (equipped items).
-    --   Force rebuild every second from the display loop.
+    -- FIX: INVENTORY TRACKER
+    -- Scans ALL Backpack children by Name (not only Tools)
+    -- so Water, Sugar Block Bag, etc. are counted correctly.
+    -- Force rebuild every second from the GUI loop.
     -- ============================================================
     local _invCache = {}
     local _invDirty = true
 
     local function rebuildInvCache()
-        local t = {}
-        -- Backpack: all children regardless of class (Tools + other items)
+        local t  = {}
         local bp = LocalPlayer.Backpack
         if bp then
-            for _, item in ipairs(bp:GetChildren()) do
-                local n = item.Name
-                if n and n ~= "" then t[n] = (t[n] or 0) + 1 end
+            for _,item in ipairs(bp:GetChildren()) do
+                local n=item.Name
+                if n and n~="" then t[n]=(t[n] or 0)+1 end
             end
         end
-        -- Character: only equipped Tools
         local ch = LocalPlayer.Character
         if ch then
-            for _, item in ipairs(ch:GetChildren()) do
-                if item:IsA("Tool") then
-                    local n = item.Name
-                    t[n] = (t[n] or 0) + 1
-                end
+            for _,item in ipairs(ch:GetChildren()) do
+                if item:IsA("Tool") then local n=item.Name; t[n]=(t[n] or 0)+1 end
             end
         end
-        _invCache = t
-        _invDirty = false
+        _invCache=t; _invDirty=false
     end
 
-    local function onInvChanged() _invDirty = true end
+    local function onInvChanged() _invDirty=true end
     LocalPlayer.Backpack.ChildAdded:Connect(onInvChanged)
     LocalPlayer.Backpack.ChildRemoved:Connect(onInvChanged)
     LocalPlayer.CharacterAdded:Connect(function(char)
-        _invDirty = true
+        _invDirty=true
         char.ChildAdded:Connect(onInvChanged)
         char.ChildRemoved:Connect(onInvChanged)
     end)
@@ -601,7 +621,6 @@ do
     end
     S.unequipAll = unequipAll
 
-    -- Uses GetPartBoundsInRadius instead of workspace:GetDescendants() — much faster
     local function firePromptNearby(radius)
         local ch=LocalPlayer.Character; local root=ch and ch:FindFirstChild("HumanoidRootPart"); if not root then return end
         local parts=workspace:GetPartBoundsInRadius(root.Position,radius or 8)
@@ -657,106 +676,63 @@ do
     end
 
     -- ============================================================
-    -- FIX 4: STATUS LABELS NOT UPDATING
-    -- Root cause: Lua's __newindex metamethod ONLY fires when the
-    -- key does NOT already exist in the table. Because statusValue
-    -- was initialised with {Text="OFF",...}, setting .Text="x"
-    -- again bypassed __newindex entirely — the GUI label never got
-    -- the update.
+    -- FIX: STATUS LABELS NOT UPDATING
+    -- Root cause: Lua's __newindex metamethod is only called when
+    -- a key does NOT already exist in the table. Pre-initialising
+    -- {Text="OFF"} means all future .Text="x" assignments bypass
+    -- __newindex silently. Even the "proxy" pattern from v9 had
+    -- a subtle issue where guiRefs could be nil during the first
+    -- call if _regAllRefs hadn't fired yet.
     --
-    -- Fix: PROXY PATTERN — keep the proxy table permanently empty
-    -- so __newindex fires on every single assignment. Actual values
-    -- are stored in a private `store` table accessed via __index.
+    -- Fix: Use direct function callbacks stored in S.
+    -- GUI sets these after creating labels. Farming functions call
+    -- them directly — no metatable, no proxy, no timing issues.
     -- ============================================================
-    local guiRefs = {statusLbl=nil,phaseLbl=nil,timerLbl=nil,safeLbl=nil,sellStat=nil,sellItem=nil}
-    S._guiRefs = guiRefs
+    S._cbStatus  = nil  -- function(text)
+    S._cbPhase   = nil  -- function(text)
+    S._cbTimer   = nil  -- function(text)
+    S._cbSafe    = nil  -- function(text)
+    S._cbSellSt  = nil  -- function(text)
+    S._cbSellIt  = nil  -- function(text)
 
-    -- Called once after all GUI labels exist (fixes the "nil ref on first Set" race)
-    S._regAllRefs = function(sl,pl,tl,sf,ss,si)
-        guiRefs.statusLbl=sl; guiRefs.phaseLbl=pl; guiRefs.timerLbl=tl
-        guiRefs.safeLbl=sf;   guiRefs.sellStat=ss; guiRefs.sellItem=si
+    -- Internal state (read by GUI buttons to reset labels)
+    local _statusText  = "OFF"
+    local _phaseText   = "Water"
+    local _timerText   = "0s"
+
+    local function _setStatus(msg, color)
+        _statusText = msg
+        if S._cbStatus then pcall(S._cbStatus, msg) end
+    end
+    local function _setPhase(txt)
+        _phaseText = txt
+        if S._cbPhase then pcall(S._cbPhase, txt) end
+    end
+    local function _setTimer(txt)
+        _timerText = txt
+        if S._cbTimer then pcall(S._cbTimer, txt) end
     end
 
-    local function makeProxy(defaults, onText)
-        local store={}; for k,v in pairs(defaults) do store[k]=v end
-        return setmetatable({},{
-            __index    = function(_,k) return store[k] end,
-            __newindex = function(_,k,v) store[k]=v; if k=="Text" then onText(tostring(v)) end end,
-        })
-    end
+    -- Expose for GUI STOP button to call directly
+    S.setStatusDirect = _setStatus
+    S.setPhaseDirect  = _setPhase
+    S.setTimerDirect  = _setTimer
+    S.setSafeDirect   = function(txt) if S._cbSafe   then pcall(S._cbSafe,   txt) end end
+    S.setSellStDirect = function(txt) if S._cbSellSt then pcall(S._cbSellSt, txt) end end
+    S.setSellItDirect = function(txt) if S._cbSellIt then pcall(S._cbSellIt, txt) end end
 
-    local statusValue = makeProxy({Text="OFF",Color=Color3.fromRGB(255,60,90)}, function(v)
-        if guiRefs.statusLbl then pcall(function() guiRefs.statusLbl:Set("Status: "..v) end) end
-    end)
-    local phaseValue = makeProxy({Text="Water"}, function(v)
-        if guiRefs.phaseLbl then pcall(function() guiRefs.phaseLbl:Set("Phase: "..v) end) end
-    end)
-    local timerValue = makeProxy({Text="0s"}, function(v)
-        if guiRefs.timerLbl then pcall(function() guiRefs.timerLbl:Set("Timer: "..v) end) end
-    end)
-    local safeModeStatusLbl = makeProxy({Text="OFF"}, function(v)
-        if guiRefs.safeLbl then pcall(function() guiRefs.safeLbl:Set("Safe Mode: "..v) end) end
-    end)
-    local sellStatusLbl_ref = makeProxy({Text="OFF"}, function(v)
-        if guiRefs.sellStat then pcall(function() guiRefs.sellStat:Set("Status: "..v) end) end
-    end)
-    local sellItemLbl_ref = makeProxy({Text="-"}, function(v)
-        if guiRefs.sellItem then pcall(function() guiRefs.sellItem:Set("Item: "..v) end) end
-    end)
-
-    S.statusValue       = statusValue
-    S.phaseValue        = phaseValue
-    S.timerValue        = timerValue
-    S.safeModeStatusLbl = safeModeStatusLbl
-    S.sellStatusLbl_ref = sellStatusLbl_ref
-    S.sellItemLbl_ref   = sellItemLbl_ref
-
-    local function _setStatus(msg,color) statusValue.Text=msg; if color then statusValue.Color=color end end
-    local function _setPhase(txt) phaseValue.Text=txt end
-    local function _setTimer(txt) timerValue.Text=txt end
-
-    local function countdown(secs,phaseTxt,color)
+    local function countdown(secs, phaseTxt, color)
         for i=secs,1,-1 do
             if not S.isRunning then return false end
             while S.safeModeActive do if not S.isRunning then return false end; task.wait(0.5) end
             if not S.isRunning then return false end
-            statusValue.Text=phaseTxt; if color then statusValue.Color=color end
-            phaseValue.Text=phaseTxt; timerValue.Text=i.."s"
+            _setStatus(phaseTxt, color); _setPhase(phaseTxt); _setTimer(i.."s")
             task.wait(1)
         end
         return true
     end
 
-    -- ============================================================
-    -- FIX 5 & 6: TP BUG + SAFE MODE SLOW
-    -- Root cause (TP): Kill-based teleport is unreliable — respawn
-    -- timing varies per server, and tpPending could be cleared before
-    -- CharacterAdded fires.
-    -- Fix: Direct HRP CFrame teleport with a short 0.1s anchor trick
-    -- to avoid physics correction. Falls back to kill-TP if character
-    -- is not loaded.
-    --
-    -- Root cause (Safe Mode slow): moveVehicle had two 0.05s waits +
-    -- fullyTeleport had 0.8s wait = ~0.9s+ before player moves.
-    -- Fix: Reduced anchoring delay to 0.02s and teleport wait to 0.4s.
-    -- Safe mode uses a lightweight direct-HRP-only teleport (no vehicle
-    -- fuss) so it triggers in <0.1s.
-    -- ============================================================
-
-    -- Fast direct teleport (no kill, no respawn wait)
-    local function directTP(targetPos)
-        local ch=LocalPlayer.Character; if not ch then return false end
-        local hrp=ch:FindFirstChild("HumanoidRootPart"); if not hrp then return false end
-        local goal=CFrame.new(targetPos+Vector3.new(0,3,0), targetPos+Vector3.new(0,3,1))
-        pcall(function()
-            hrp.CFrame = goal
-            task.wait(0.05)
-            hrp.CFrame = goal -- double-set to beat physics correction
-        end)
-        return true
-    end
-
-    local function moveVehicle(vehicle,targetPos)
+    local function moveVehicle(vehicle, targetPos)
         local anchor=vehicle.PrimaryPart or vehicle:FindFirstChildOfClass("VehicleSeat") or vehicle:FindFirstChildOfClass("BasePart")
         if not anchor then return end
         local spawnPos=targetPos+Vector3.new(0,0.5,0)
@@ -764,9 +740,9 @@ do
         for _,p in ipairs(vehicle:GetDescendants()) do
             if p:IsA("BasePart") then pcall(function() p.AssemblyLinearVelocity=Vector3.zero; p.AssemblyAngularVelocity=Vector3.zero; p.Anchored=true end) end
         end
-        task.wait(0.02) -- FIX 6: reduced from 0.05
+        task.wait(0.05)
         if vehicle.PrimaryPart then vehicle:SetPrimaryPartCFrame(newCF) else anchor.CFrame=newCF end
-        task.wait(0.02) -- FIX 6: reduced from 0.05
+        task.wait(0.05)
         for _,p in ipairs(vehicle:GetDescendants()) do
             if p:IsA("BasePart") then pcall(function() p.Anchored=false; p.AssemblyLinearVelocity=Vector3.zero; p.AssemblyAngularVelocity=Vector3.zero end) end
         end
@@ -774,36 +750,22 @@ do
 
     local function fullyTeleport(targetPos)
         local ch=LocalPlayer.Character; local hum=ch and ch:FindFirstChildOfClass("Humanoid")
-        if not ch or not hum then task.wait(0.5); return end
+        if not ch or not hum then task.wait(1); return end
         local seatPart=hum.SeatPart
         if seatPart then
             local vehicle=seatPart:FindFirstAncestorOfClass("Model")
             if vehicle then
-                moveVehicle(vehicle,targetPos)
-                task.wait(0.4) -- FIX 6: reduced from 0.8
+                moveVehicle(vehicle,targetPos); task.wait(0.8)
                 local hrp=ch:FindFirstChild("HumanoidRootPart")
-                if hrp then
-                    pcall(function()
-                        hrp.CFrame=CFrame.new(targetPos+Vector3.new(0,1,0),targetPos+Vector3.new(0,1,1))
-                    end)
-                end
+                if hrp then pcall(function() hrp.CFrame=CFrame.new(targetPos+Vector3.new(0,1,0),targetPos+Vector3.new(0,1,1)) end) end
             end
         else
-            directTP(targetPos)
-            task.wait(0.4) -- FIX 6: reduced from 0.8
+            local hrp=ch:FindFirstChild("HumanoidRootPart")
+            if hrp then pcall(function() hrp.CFrame=CFrame.new(targetPos+Vector3.new(0,1,0),targetPos+Vector3.new(0,1,1)) end) end
+            task.wait(0.8)
         end
     end
     S.fullyTeleport = fullyTeleport
-
-    -- FIX 6: Safe mode uses instant directTP instead of full fullyTeleport
-    local function safeTeleport(targetPos)
-        local ch=LocalPlayer.Character; if not ch then return end
-        local hrp=ch:FindFirstChild("HumanoidRootPart"); if not hrp then return end
-        local goal=CFrame.new(targetPos+Vector3.new(0,3,0),targetPos+Vector3.new(0,3,1))
-        pcall(function() hrp.CFrame=goal end)
-        task.wait(0.05)
-        pcall(function() hrp.CFrame=goal end)
-    end
 
     RunService.Heartbeat:Connect(function(dt)
         if not S.safeMode then S.safeModeActive=false; S.safeModeTimer=0; return end
@@ -811,8 +773,8 @@ do
         if hum then
             if hum.Health<S.lastHealth and S.lastHealth>0 then
                 S.safeModeActive=true; S.safeModeTimer=0
-                safeModeStatusLbl.Text="ACTIVE"
-                task.spawn(function() pcall(safeTeleport, S.SAFE_POS) end) -- FIX 6: non-blocking
+                S.setSafeDirect("ACTIVE")
+                task.spawn(function() pcall(fullyTeleport, S.SAFE_POS) end)
             end
             S.lastHealth=hum.Health
         end
@@ -820,8 +782,8 @@ do
             S.safeModeTimer=S.safeModeTimer+dt
             if S.safeModeTimer>10 then
                 S.safeModeActive=false; S.safeModeTimer=0
-                safeModeStatusLbl.Text="STANDBY"
-                if S.fullySavedPos then task.spawn(function() pcall(safeTeleport,S.fullySavedPos) end) end
+                S.setSafeDirect("STANDBY")
+                if S.fullySavedPos then task.spawn(function() pcall(fullyTeleport,S.fullySavedPos) end) end
             end
         end
     end)
@@ -836,7 +798,7 @@ do
         local deadline=tick()+(timeout or 2.5); local lastPos=hrp.Position
         repeat task.wait(0.25); local delta=(hrp.Position-lastPos).Magnitude; lastPos=hrp.Position; if delta<0.5 then return end until tick()>=deadline
     end
-    local function equipRetry(name,maxR)
+    local function equipRetry(name, maxR)
         for _=1,(maxR or 5) do
             local ok=equipTool(name)
             if ok then task.wait(0.3); local ch=LocalPlayer.Character
@@ -847,9 +809,10 @@ do
         return false
     end
 
-    local SELL_HOLD=1.8; local SELL_RETRIES=5
+    local SELL_HOLD    = 1.8
+    local SELL_RETRIES = 5
 
-    local function trySellOne(msName,setSt)
+    local function trySellOne(msName, setSt)
         local bS=countItem(CFG.ITEM_MS_SMALL); local bM=countItem(CFG.ITEM_MS_MEDIUM); local bL=countItem(CFG.ITEM_MS_LARGE)
         setSt("Equip: "..msName.."...",Color3.fromRGB(100,180,255))
         if not equipRetry(msName,4) then setSt("Gagal equip "..msName,Color3.fromRGB(210,40,40)); unequipAll(); task.wait(0.4); return false end
@@ -897,7 +860,7 @@ do
     end
     S.doAutoSell = doAutoSell
 
-    local function doAutoBuy(setSt,overrideQty)
+    local function doAutoBuy(setSt, overrideQty)
         if not storePurchaseRE then
             pcall(function() local rs=game:GetService("ReplicatedStorage"); local re=rs:WaitForChild("RemoteEvents",8); if re then storePurchaseRE=re:WaitForChild("StorePurchase",8); S.storePurchaseRE=storePurchaseRE end end)
         end
@@ -937,7 +900,7 @@ do
         _setStatus("Tunggu Bag...",Color3.fromRGB(100,160,255)); _setPhase("Tunggu Bag..."); waitRPC("bag_result",12)
         local bag; local t2=0
         repeat bag=LocalPlayer.Backpack:FindFirstChild(CFG.ITEM_EMPTY); task.wait(0.3); t2=t2+0.3 until bag or t2>10
-        if not bag then statusValue.Text="No Empty Bag!"; S.isBusy=false; return false end
+        if not bag then _setStatus("No Empty Bag!"); S.isBusy=false; return false end
         _setPhase("Ambil MS..."); cookInteract(CFG.ITEM_EMPTY)
         local waitMS=0; local newS,newM,newL
         repeat
@@ -959,8 +922,8 @@ do
             if not ok then _setStatus("ERROR: "..tostring(err),Color3.fromRGB(255,60,90)); task.wait(2) end
             if S.isRunning then task.wait(0.3) end
         end
-        S.isRunning=false; S.AutoMS_Running=false; _setStatus("OFF",Color3.fromRGB(255,60,90))
-        phaseValue.Text="Water"; timerValue.Text="0s"; S.isBusy=false
+        S.isRunning=false; S.AutoMS_Running=false
+        _setStatus("OFF",Color3.fromRGB(255,60,90)); _setPhase("Water"); _setTimer("0s"); S.isBusy=false
     end
     S.autoMSLoop = autoMSLoop
 
@@ -997,9 +960,9 @@ do
             if not S.autoSell_UI or S.asSelling then continue end
             local char=LocalPlayer.Character; local hum=char and char:FindFirstChildOfClass("Humanoid"); local hrp=char and char:FindFirstChild("HumanoidRootPart")
             if not char or not hum or not hrp or hum.Health<=0 then continue end
-            if countAllMS()==0 then sellItemLbl_ref.Text="-"; sellStatusLbl_ref.Text="MENUNGGU"; continue end
-            S.asSelling=true; sellStatusLbl_ref.Text="MENJUAL..."
-            doAutoSell(function(msg) sellStatusLbl_ref.Text=msg; sellItemLbl_ref.Text=msg end)
+            if countAllMS()==0 then S.setSellItDirect("-"); S.setSellStDirect("MENUNGGU"); continue end
+            S.asSelling=true; S.setSellStDirect("MENJUAL...")
+            doAutoSell(function(msg) S.setSellStDirect(msg); S.setSellItDirect(msg) end)
             S.asSelling=false
         end
     end)
@@ -1022,8 +985,7 @@ do
 
     -- ============================================================
     -- COMMUNICATION
-    -- FIX 2: Cache avatar URL so GetUserThumbnailAsync is called
-    -- once per session, not on every message send (was causing lag).
+    -- Avatar cached once — prevents lag on every message send.
     -- ============================================================
     Window:Category("Communication")
     local ChatPage   = Window:Page({Name="Server Chat",Icon="100050851789190",Columns=1})
@@ -1032,14 +994,11 @@ do
     local _cachedAvatar = nil
     local function getAvatar()
         if _cachedAvatar then return _cachedAvatar end
-        local ok,id = pcall(function()
-            return Players:GetUserThumbnailAsync(LocalPlayer.UserId,Enum.ThumbnailType.HeadShot,Enum.ThumbnailSize.Size420x420)
-        end)
-        _cachedAvatar = (ok and id) and id or "rbxassetid://78993485446406"
+        local ok,id=pcall(function() return Players:GetUserThumbnailAsync(LocalPlayer.UserId,Enum.ThumbnailType.HeadShot,Enum.ThumbnailSize.Size420x420) end)
+        _cachedAvatar=(ok and id) and id or "rbxassetid://78993485446406"
         return _cachedAvatar
     end
-    -- Pre-fetch avatar in background so first send is instant
-    task.spawn(getAvatar)
+    task.spawn(getAvatar) -- pre-fetch in background
 
     GlobalChat:OnMessageSendPressed(function()
         GlobalChat:SendMessage(getAvatar(),LocalPlayer.DisplayName,GlobalChat:GetTypedMessage(),false)
@@ -1053,24 +1012,33 @@ do
     local pageAutoFully = Window:Page({Name="Auto Fully", Icon="108839695397679"})
     local pageSellBuy   = Window:Page({Name="Sell / Buy", Icon="126497581491926"})
 
+    -- Status display labels
     local secStatus = pageAutoMS:Section({Name="Status Memasak",Side=1})
     local statusLbl = secStatus:Label("Status: OFF")
     local phaseLbl  = secStatus:Label("Phase: Water")
     local timerLbl  = secStatus:Label("Timer: 0s")
 
+    -- FIX: Wire direct callbacks to labels immediately after creation
+    S._cbStatus = function(v) pcall(function() statusLbl:Set("Status: "..v) end) end
+    S._cbPhase  = function(v) pcall(function() phaseLbl:Set("Phase: "..v)   end) end
+    S._cbTimer  = function(v) pcall(function() timerLbl:Set("Timer: "..v)   end) end
+
+    -- Cooking controls
     local secCook = pageAutoMS:Section({Name="Kontrol Masak",Side=2})
     secCook:Button({Name="START Masak",Callback=function()
         if not S.isRunning then
-            S.isRunning=true; S.statusValue.Text="STARTING"; S.statusValue.Color=Color3.fromRGB(255,215,0)
+            S.isRunning=true
+            S.setStatusDirect("STARTING",Color3.fromRGB(255,215,0))
             task.spawn(S.autoMSLoop)
         end
     end})
     secCook:Button({Name="STOP Masak",Callback=function()
         S.isRunning=false; S.AutoMS_Running=false
-        S.statusValue.Text="OFF"; S.statusValue.Color=Color3.fromRGB(255,60,90)
-        S.phaseValue.Text="Water"; S.timerValue.Text="0s"
+        S.setStatusDirect("OFF",Color3.fromRGB(255,60,90))
+        S.setPhaseDirect("Water"); S.setTimerDirect("0s")
     end})
 
+    -- Inventory display
     local secInv   = pageAutoMS:Section({Name="Inventory",Side=1})
     local waterLbl = secInv:Label("Water: 0")
     local gelLbl   = secInv:Label("Gelatin: 0")
@@ -1078,6 +1046,7 @@ do
     local bagLbl   = secInv:Label("Empty Bag: 0")
     local msBagLbl = secInv:Label("MS Bag: 0")
 
+    -- Auto Fully
     local secFullyStat  = pageAutoFully:Section({Name="Status",Side=1})
     local _fullyStatLbl = secFullyStat:Label("Belum dimulai")
     local secFullyCtrl  = pageAutoFully:Section({Name="Kontrol",Side=1})
@@ -1106,30 +1075,38 @@ do
         pcall(function() _fullyStatLbl:Set("Stopped") end)
     end})
 
+    -- Safe Mode
     local secSafeMode = pageAutoFully:Section({Name="Safe Mode",Side=2})
     local safeLblEl   = secSafeMode:Label("Safe Mode: OFF")
+    S._cbSafe = function(v) pcall(function() safeLblEl:Set("Safe Mode: "..v) end) end
     secSafeMode:Toggle({Name="Enable Safe Mode",Default=false,Flag="SafeMode",
         Callback=function(v)
             S.safeMode=v
             if v then
                 local ch=LocalPlayer.Character; local h=ch and ch:FindFirstChildOfClass("Humanoid")
-                if h then S.lastHealth=h.Health end; S.safeModeStatusLbl.Text="STANDBY"
-            else S.safeModeActive=false; S.safeModeStatusLbl.Text="OFF" end
+                if h then S.lastHealth=h.Health end; S.setSafeDirect("STANDBY")
+            else
+                S.safeModeActive=false; S.setSafeDirect("OFF")
+            end
         end})
 
+    -- Auto Sell
     local secAutoSell = pageSellBuy:Section({Name="Auto Sell",Side=1})
     local sellStatLbl = secAutoSell:Label("Status: OFF")
     local sellItemEl  = secAutoSell:Label("Item: -")
+    S._cbSellSt = function(v) pcall(function() sellStatLbl:Set("Status: "..v) end) end
+    S._cbSellIt = function(v) pcall(function() sellItemEl:Set("Item: "..v)   end) end
     secAutoSell:Toggle({Name="Auto Sell",Default=false,Flag="AutoSellToggle",
         Callback=function(v)
             S.autoSell_UI=v
-            if not v then S.asSelling=false; S.sellStatusLbl_ref.Text="OFF"; S.sellItemLbl_ref.Text="-"
-            else S.sellStatusLbl_ref.Text="ON" end
+            if not v then S.asSelling=false; S.setSellStDirect("OFF"); S.setSellItDirect("-")
+            else S.setSellStDirect("ON") end
         end})
     secAutoSell:Button({Name="Jual Sekarang",Callback=function()
-        task.spawn(function() S.doAutoSell(function(msg) S.sellStatusLbl_ref.Text=msg; S.sellItemLbl_ref.Text=msg end) end)
+        task.spawn(function() S.doAutoSell(function(msg) S.setSellStDirect(msg); S.setSellItDirect(msg) end) end)
     end})
 
+    -- Buy
     local secBuy = pageSellBuy:Section({Name="Buy Bahan",Side=2})
     local buyW=1; local buyG=1; local buySu=1
     secBuy:Slider({Name="Water",  Min=0,Max=50,Default=1,Suffix=" x",Callback=function(v) buyW=v   end})
@@ -1142,15 +1119,37 @@ do
         end)
     end})
 
-    -- FIX 4: Register ALL refs in one call after ALL labels exist
-    S._regAllRefs(statusLbl,phaseLbl,timerLbl,safeLblEl,sellStatLbl,sellItemEl)
-
     -- ============================================================
     -- WORLD
     -- ============================================================
     Window:Category("World")
     local pageTP      = Window:Page({Name="Teleport",Icon="123944728972740"})
     local pageVehicle = Window:Page({Name="Vehicle",  Icon="138827881557940"})
+
+    -- FIX: Kill-based teleport (die → respawn at destination).
+    -- More reliable than direct CFrame TP which gets corrected by
+    -- physics/anti-cheat on some servers.
+    local tpDestination = nil
+    local tpPending     = false
+
+    local function onCharAdded(char)
+        if not tpPending or not tpDestination then return end
+        tpPending = false
+        task.spawn(function()
+            local hrp = char:WaitForChild("HumanoidRootPart",10); if not hrp then return end
+            task.wait(1)
+            hrp.CFrame = CFrame.new(tpDestination.x, tpDestination.y+3, tpDestination.z)
+            tpDestination = nil
+        end)
+    end
+    if LocalPlayer.Character then task.spawn(onCharAdded, LocalPlayer.Character) end
+    LocalPlayer.CharacterAdded:Connect(onCharAdded)
+
+    local function tpTo(x,y,z)
+        local ch=LocalPlayer.Character; local h=ch and ch:FindFirstChildOfClass("Humanoid")
+        tpDestination={x=x,y=y,z=z}; tpPending=true
+        if ch and h and h.Health>0 then h.Health=0 end
+    end
 
     local tpLocs = {
         {name="Dealership",  x=732.117, y=3.362, z=406.08},
@@ -1167,18 +1166,6 @@ do
         {name="Apart 5",     x=925.531, y=11.016,z=39.366},
         {name="Apart 6",     x=896.86,  y=11.042,z=38.65}
     }
-
-    -- FIX 5: Direct HRP teleport instead of kill-and-respawn.
-    -- Kill-TP was unreliable because respawn timing varies per server.
-    local function tpTo(x,y,z)
-        local ch=LocalPlayer.Character; if not ch then return end
-        local hrp=ch:FindFirstChild("HumanoidRootPart"); if not hrp then return end
-        local goal=CFrame.new(x,y+3,z)
-        pcall(function() hrp.CFrame=goal end)
-        task.wait(0.05)
-        pcall(function() hrp.CFrame=goal end)
-    end
-
     local tpNames={}; for _,l in ipairs(tpLocs) do table.insert(tpNames,l.name) end
     local selTPIdx=1
     local secTP=pageTP:Section({Name="Lokasi",Side=1})
@@ -1188,14 +1175,7 @@ do
         local l=tpLocs[selTPIdx]; if l then tpTo(l.x,l.y,l.z) end
     end})
 
-    -- ============================================================
-    -- FIX 3: REFRESH PLAYER LIST
-    -- Root cause: PlayerAdded fired before player was fully loaded,
-    -- so their name/data wasn't ready. task.wait(0.5) wasn't enough
-    -- on slower servers.
-    -- Fix: Wait up to 3s for the player's Name to be non-empty,
-    -- then update. Also refresh on Removing with a short delay.
-    -- ============================================================
+    -- TP to Player
     local secTPP  = pageTP:Section({Name="TP ke Player",Side=2})
     local plNames = {}
     local selTPP  = nil
@@ -1203,9 +1183,7 @@ do
     local function updPl()
         plNames={}
         for _,p in pairs(Players:GetPlayers()) do
-            if p~=LocalPlayer and p.Name and p.Name~="" then
-                table.insert(plNames,p.Name)
-            end
+            if p~=LocalPlayer and p.Name and p.Name~="" then table.insert(plNames,p.Name) end
         end
     end
     updPl()
@@ -1215,15 +1193,9 @@ do
 
     Players.PlayerAdded:Connect(function(plr)
         task.spawn(function()
-            -- Wait until the player's Name is valid (up to 3s)
             local waited=0
-            while (not plr or not plr.Parent or plr.Name=="") and waited<3 do
-                task.wait(0.5); waited=waited+0.5
-            end
-            if plr and plr.Parent then
-                updPl()
-                pcall(function() plDD.Items=plNames end)
-            end
+            while (not plr or not plr.Parent or plr.Name=="") and waited<3 do task.wait(0.5); waited=waited+0.5 end
+            if plr and plr.Parent then updPl(); pcall(function() plDD.Items=plNames end) end
         end)
     end)
     Players.PlayerRemoving:Connect(function()
@@ -1257,7 +1229,7 @@ do
         local h=c:WaitForChild("Humanoid",10); if not h then return end
         h:GetPropertyChangedSignal("SeatPart"):Connect(updSeat); updSeat()
     end
-    if LocalPlayer.Character then task.spawn(hookVC,LocalPlayer.Character) end
+    if LocalPlayer.Character then task.spawn(hookVC, LocalPlayer.Character) end
     LocalPlayer.CharacterAdded:Connect(function(c) task.spawn(hookVC,c) end)
 
     local function tpVehicle(x,y,z)
@@ -1306,10 +1278,12 @@ do
     secVFly:Label("WASD = Move | E = Up | Q = Down")
 
     -- ============================================================
-    -- COMBAT
-    -- FIX 7: Aim key label wired through S._aimKeyLblSet so the
-    -- global capture handler (defined in the Aimbot do-block) can
-    -- update it directly. No more local capConn race condition.
+    -- COMBAT — Aimbot
+    -- Aim key system taken from Majesty Store:
+    --   Label shows current key. Click "Set Aim Key" → label shows
+    --   ">> PRESS ANY KEY <<". Press any key/mouse button → label
+    --   updates instantly to new key. Supports RMB, MMB, MB4, MB5,
+    --   and any keyboard key. LMB is excluded (used to click button).
     -- ============================================================
     Window:Category("Combat")
     local pageAimbot = Window:Page({Name="Aimbot",Icon="134236649319095"})
@@ -1318,18 +1292,19 @@ do
     secAim:Toggle({Name="Enable Aimbot",Default=false,Flag="AimbotToggle",
         Callback=function(v) S.aimOn=v; if not v then S.aimToggle=false end end})
 
-    local defaultKeyName = S.aimKey and S.aimKey.Name or "None"
-    local aimKeyLbl      = secAim:Label("Aim Key: ["..defaultKeyName.."]")
+    -- Aim key label (shows current binding like "Aim Key: [RMB]")
+    local aimKeyLbl = secAim:Label("Aim Key: ["..S.aimKBLabel.."]")
 
-    -- Wire the global capture handler to update this label
+    -- Wire label updater to the global capture handler
     S._aimKeyLblSet = function(txt) pcall(function() aimKeyLbl:Set(txt) end) end
 
+    -- "Set Aim Key" button — click, then press any key/mouse button
     secAim:Button({Name="Set Aim Key",Callback=function()
-        if S.aimCapturing then return end
-        S.aimCapturing=true
-        pcall(function() aimKeyLbl:Set(">> PRESS ANY KEY <<") end)
-        -- The global InputBegan handler in the Aimbot do-block will
-        -- pick up the next key press and call S._aimKeyLblSet automatically.
+        if S.isBindingKey then return end
+        S.isBindingKey = true
+        pcall(function() aimKeyLbl:Set("Aim Key: [>> PRESS ANY KEY <<]") end)
+        -- Global InputBegan handler in Aimbot do-block will capture
+        -- the next non-LMB input and call S._aimKeyLblSet automatically.
     end})
 
     secAim:Dropdown({Name="Mode",  Default="Hold",  Items={"Hold","Toggle"},   Callback=function(v) S.aimKBMode=v; S.aimToggle=false end})
@@ -1338,7 +1313,7 @@ do
     local secTgt=pageAimbot:Section({Name="Target",Side=2})
     secTgt:Dropdown({Name="Target Part",Default="Head",     Items={"Head","HumanoidRootPart"},Callback=function(v) S.aimPart=v end})
     secTgt:Dropdown({Name="Priority",   Default="Crosshair",Items={"Crosshair","Distance"},   Callback=function(v) S.aimPriority=v end})
-    secTgt:Slider({Name="Max Distance",Min=0,Max=2000,Default=1000,Suffix=" st",             Callback=function(v) S.aimMaxDist=v end})
+    secTgt:Slider({Name="Max Distance",Min=0,Max=2000,Default=500,Suffix=" st",              Callback=function(v) S.aimMaxDist=v end})
 
     local secFOV=pageAimbot:Section({Name="FOV Circle",Side=1})
     secFOV:Slider({Name="FOV Radius",Min=20,Max=800,Default=250,Suffix=" px",Callback=function(v) S.aimFOV=v end})
@@ -1369,6 +1344,7 @@ do
     secESPOpt:Label("Shows: Box, Name, HP,")
     secESPOpt:Label("Distance, Tool, Skeleton")
 
+    -- Whitelist
     local secWL=pageWL:Section({Name="Whitelist",Side=1})
     secWL:Label("Ignored by ESP & Aimbot")
     local function getWLText()
@@ -1409,8 +1385,8 @@ do
     task.defer(function()
         Window:Init()
 
-        -- FIX 1: Force inventory rebuild every second so the display
-        -- is always accurate even if events were missed.
+        -- Inventory refresh loop: force rebuild every second so
+        -- labels always show accurate counts.
         task.spawn(function()
             while true do
                 task.wait(1)
