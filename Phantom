@@ -1,5 +1,8 @@
 _G.KEY = _G.KEY or "YOUR-KEY-HERE"
 
+-- ================================================================
+-- SERVICES
+-- ================================================================
 local HttpService      = game:GetService("HttpService")
 local Players          = game:GetService("Players")
 local LocalPlayer      = Players.LocalPlayer
@@ -9,6 +12,9 @@ local Workspace        = game:GetService("Workspace")
 local Camera           = Workspace.CurrentCamera
 local VIM              = game:GetService("VirtualInputManager")
 
+-- ================================================================
+-- STATE TABLE
+-- ================================================================
 local S = {}
 
 -- ================================================================
@@ -32,13 +38,17 @@ do
     print("Phantom.wtf v1.0.0 LOADED")
 end
 
-_G.PhantomConfig = { DefaultAimKey = Enum.KeyCode.E }
+-- ================================================================
+-- GLOBAL CONFIG
+-- ================================================================
+_G.PhantomConfig = { DefaultAimKey = Enum.UserInputType.MouseButton2 }
 S.whitelist = {}
 
 -- ================================================================
 -- ESP SYSTEM
--- Runs on Heartbeat at 30fps cap — doesn't compete with aimbot.
--- Hide-once prevents blink. Char-change detection avoids stale boxes.
+-- Heartbeat at 30 fps cap — does not compete with aimbot on
+-- RenderStepped. Hide-once flag prevents blink on disable.
+-- Char-change detection clears stale drawings on respawn.
 -- ================================================================
 do
     S.ESP_ENABLED   = false
@@ -73,7 +83,7 @@ do
         d._vis = false
     end
 
-    local function remove(plr)
+    local function removeESP(plr)
         local d = ESP_OBJ[plr]; if not d then return end
         pcall(function()
             for i=1,4 do
@@ -92,7 +102,7 @@ do
         ESP_OBJ[plr] = nil
     end
 
-    local function create(plr)
+    local function createESP(plr)
         if plr == LocalPlayer then return end
         if ESP_OBJ[plr] then return end
         local d = {}
@@ -134,7 +144,7 @@ do
         local fb = R6FB[name]; return fb and getPart(char, fb)
     end
 
-    local function update(plr, cam, myHRP)
+    local function updateESP(plr, cam, myHRP)
         local d = ESP_OBJ[plr]; if not d then return end
         local char = plr.Character
         if not char or not char.Parent then hide(d); return end
@@ -224,6 +234,7 @@ do
         end
     end
 
+    -- Throttled ESP render loop on Heartbeat (not RenderStepped)
     local _ea = 0
     RunService.Heartbeat:Connect(function(dt)
         _ea = _ea + dt
@@ -238,17 +249,17 @@ do
         local myHRP = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
         if not myHRP then return end
         for plr in pairs(ESP_OBJ) do
-            if plr.Character then pcall(update, plr, cam, myHRP) end
+            if plr.Character then pcall(updateESP, plr, cam, myHRP) end
         end
     end)
 
-    for _,plr in pairs(Players:GetPlayers()) do task.defer(create, plr) end
-    Players.PlayerAdded:Connect(function(plr) task.defer(create, plr) end)
-    Players.PlayerRemoving:Connect(remove)
+    for _,plr in pairs(Players:GetPlayers()) do task.defer(createESP, plr) end
+    Players.PlayerAdded:Connect(function(plr) task.defer(createESP, plr) end)
+    Players.PlayerRemoving:Connect(removeESP)
 end
 
 -- ================================================================
--- VEHICLE FLY (E = UP, Q = DOWN — cached parts system)
+-- VEHICLE FLY (E = UP, Q = DOWN — cached-parts system)
 -- ================================================================
 do
     S.vFlyOn  = false
@@ -267,7 +278,7 @@ do
         if inp.KeyCode == Enum.KeyCode.Q then dn = false end
     end)
 
-    local function start()
+    local function startFly()
         if conn then conn:Disconnect(); conn = nil end
         local vPartsCache = {}; local lastModel = nil
         conn = RunService.RenderStepped:Connect(function(dt)
@@ -309,19 +320,16 @@ do
         end)
     end
 
-    local function stop()
+    local function stopFly()
         if conn then conn:Disconnect(); conn=nil end
         up=false; dn=false
     end
-    S.vFlyStart = start
-    S.vFlyStop  = stop
+    S.vFlyStart = startFly
+    S.vFlyStop  = stopFly
 end
 
 -- ================================================================
--- AIMBOT
--- FIX: Aim key system taken from Majesty — click button → "..." →
--- press any key (RMB, MMB, MB4, MB5, or keyboard) → sets key.
--- Supports full MB4/MB5 via held state trackers.
+-- AIMBOT — Majesty-style keybind (RMB default, supports MB4/MB5)
 -- ================================================================
 do
     S.aimOn       = false
@@ -335,17 +343,25 @@ do
     S.aimMaxDist  = 500
     S.aimFovCol   = Color3.fromRGB(0,196,255)
 
-    -- Keybind state (Majesty system: type + payload + label)
-    S.aimKBType  = "MouseButton"                     -- "KeyCode"|"MouseButton"|"MB4"|"MB5"
-    S.aimKBBtn   = Enum.UserInputType.MouseButton2   -- for MouseButton type
-    S.aimKBCode  = nil                               -- for KeyCode type
-    S.aimKBLabel = "RMB"                             -- display text
+    -- Keybind state — default: RMB
+    S.aimKBType  = "MouseButton"
+    S.aimKBBtn   = Enum.UserInputType.MouseButton2
+    S.aimKBCode  = nil
+    S.aimKBLabel = "RMB"
     S.isBindingKey = false
 
-    -- MB4 / MB5 held-state trackers (these cannot be polled directly)
+    -- Toggle mode state
+    S.aimKBMode  = "Hold"
+    S.aimToggle  = false
+
+    -- GUI label callback (set after label is created in GUI block)
+    S._aimKeyLblSet = nil
+
+    -- MB4 / MB5 are not pollable — track with held flags
     local mb4Held = false
     local mb5Held = false
 
+    -- MB4 / MB5 tracking
     UserInputService.InputBegan:Connect(function(input)
         local kn = tostring(input.KeyCode):gsub("Enum%.KeyCode%.","")
         local un = tostring(input.UserInputType):gsub("Enum%.UserInputType%.","")
@@ -359,14 +375,10 @@ do
         if kn=="MouseButton5" or un=="MouseButton5" then mb5Held=false end
     end)
 
-    -- Exposed for GUI label updater
-    S._aimKeyLblSet = nil
-
-    -- Majesty-style key capture: global InputBegan handler
-    -- Click button → S.isBindingKey=true → next non-LMB input captured
+    -- Global capture handler — fires whenever isBindingKey is true
     UserInputService.InputBegan:Connect(function(input, _gpe)
         if not S.isBindingKey then return end
-        -- Ignore LMB (used to click the Set Key button)
+        -- Ignore LMB: used to click the Set Key button itself
         if input.UserInputType == Enum.UserInputType.MouseButton1 then return end
 
         local kn = tostring(input.KeyCode):gsub("Enum%.KeyCode%.","")
@@ -376,36 +388,22 @@ do
             S.aimKBType="MouseButton"; S.aimKBBtn=Enum.UserInputType.MouseButton2; S.aimKBCode=nil; S.aimKBLabel="RMB"
         elseif un == "MouseButton3" then
             S.aimKBType="MouseButton"; S.aimKBBtn=Enum.UserInputType.MouseButton3; S.aimKBCode=nil; S.aimKBLabel="MMB"
-        elseif un == "MouseButton4" or kn == "MouseButton4" then
+        elseif un=="MouseButton4" or kn=="MouseButton4" then
             S.aimKBType="MB4"; S.aimKBBtn=nil; S.aimKBCode=nil; S.aimKBLabel="MB4"
-        elseif un == "MouseButton5" or kn == "MouseButton5" then
+        elseif un=="MouseButton5" or kn=="MouseButton5" then
             S.aimKBType="MB5"; S.aimKBBtn=nil; S.aimKBCode=nil; S.aimKBLabel="MB5"
-        elseif un == "Keyboard" and kn ~= "Unknown" and input.KeyCode ~= Enum.KeyCode.Unknown then
+        elseif un=="Keyboard" and kn~="Unknown" and input.KeyCode~=Enum.KeyCode.Unknown then
             S.aimKBType="KeyCode"; S.aimKBCode=input.KeyCode; S.aimKBBtn=nil; S.aimKBLabel=kn
         else
             return -- unrecognised, keep listening
         end
 
         S.isBindingKey = false
-        if S._aimKeyLblSet then pcall(S._aimKeyLblSet, "Aim Key: ["..S.aimKBLabel.."]") end
+        -- Update GUI button label with new key
+        if S._aimKeyLblSet then pcall(S._aimKeyLblSet, S.aimKBLabel) end
     end)
 
-    -- isAimHeld: reads live S.aimKBType/S.aimKBCode/S.aimKBBtn each frame
-    local function isAimHeld()
-        if S.isBindingKey then return false end
-        if S.aimKBType == "KeyCode"     then return S.aimKBCode  and UserInputService:IsKeyDown(S.aimKBCode) end
-        if S.aimKBType == "MouseButton" then
-            if S.aimKBBtn == Enum.UserInputType.MouseButton2 then return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) end
-            if S.aimKBBtn == Enum.UserInputType.MouseButton3 then return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton3) end
-        end
-        if S.aimKBType == "MB4" then return mb4Held end
-        if S.aimKBType == "MB5" then return mb5Held end
-        return false
-    end
-
-    S.aimKBMode  = "Hold"
-    S.aimToggle  = false
-
+    -- Toggle mode trigger
     UserInputService.InputBegan:Connect(function(input, gpe)
         if gpe or S.isBindingKey then return end
         if S.aimOn and S.aimKBMode == "Toggle" then
@@ -418,8 +416,22 @@ do
         end
     end)
 
-    local velCache = {}
+    -- isAimHeld reads live S fields every frame — always reflects current binding
+    local function isAimHeld()
+        if S.isBindingKey then return false end
+        if S.aimKBMode=="Toggle" then return S.aimToggle end
+        if S.aimKBType=="KeyCode"     then return S.aimKBCode and UserInputService:IsKeyDown(S.aimKBCode) end
+        if S.aimKBType=="MouseButton" then
+            if S.aimKBBtn==Enum.UserInputType.MouseButton2 then return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) end
+            if S.aimKBBtn==Enum.UserInputType.MouseButton3 then return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton3) end
+        end
+        if S.aimKBType=="MB4" then return mb4Held end
+        if S.aimKBType=="MB5" then return mb5Held end
+        return false
+    end
 
+    -- Velocity prediction cache
+    local velCache = {}
     local function getPredPos(part, player)
         local now=tick(); local cur=part.Position
         if not velCache[player] then velCache[player]={lastPos=cur,lastVel=Vector3.zero,lastTime=now}; return cur end
@@ -431,7 +443,7 @@ do
         return cur+c.lastVel*S.aimPredStr
     end
 
-    local function getBest()
+    local function getBestTarget()
         local mp=UserInputService:GetMouseLocation(); local vs=Camera.ViewportSize
         local cx=S.aimMode=="FreeAim" and mp.X or vs.X*0.5
         local cy=S.aimMode=="FreeAim" and mp.Y or vs.Y*0.5
@@ -454,11 +466,10 @@ do
     end
 
     local function shouldAim()
-        if not S.aimOn or S.isBindingKey then return false end
-        if S.aimKBMode=="Toggle" then return S.aimToggle end
-        return isAimHeld()
+        return S.aimOn and not S.isBindingKey and isAimHeld()
     end
 
+    -- FOV circle drawing
     local aimCircle = Drawing.new("Circle")
     aimCircle.Thickness=1.5; aimCircle.Filled=false; aimCircle.Transparency=0.75
     aimCircle.NumSides=64; aimCircle.Color=S.aimFovCol; aimCircle.Visible=false
@@ -483,7 +494,7 @@ do
             aimCircle.Color=S.aimFovCol; aimCircle.Visible=S.aimOn
         end
         if not shouldAim() then return end
-        local target,tPlr=getBest(); if not target then return end
+        local target,tPlr=getBestTarget(); if not target then return end
         local pos=getPredPos(target,tPlr)
         if S.aimMode=="Camera" then
             local cf=Camera.CFrame; local goal=CFrame.new(cf.Position,pos)
@@ -550,10 +561,10 @@ do
     }
 
     -- ============================================================
-    -- FIX: INVENTORY TRACKER
-    -- Scans ALL Backpack children by Name (not only Tools)
-    -- so Water, Sugar Block Bag, etc. are counted correctly.
-    -- Force rebuild every second from the GUI loop.
+    -- INVENTORY TRACKER
+    -- FIX: Scans ALL Backpack children by Name (not just Tools)
+    -- so Water, Sugar Block Bag, Gelatin, Empty Bag are counted.
+    -- Force-rebuilds every second via S.markInvDirty() in GUI loop.
     -- ============================================================
     local _invCache = {}
     local _invDirty = true
@@ -562,25 +573,31 @@ do
         local t  = {}
         local bp = LocalPlayer.Backpack
         if bp then
+            -- Count ALL items in backpack regardless of class
             for _,item in ipairs(bp:GetChildren()) do
-                local n=item.Name
-                if n and n~="" then t[n]=(t[n] or 0)+1 end
+                local n = item.Name
+                if n and n ~= "" then t[n] = (t[n] or 0) + 1 end
             end
         end
         local ch = LocalPlayer.Character
         if ch then
+            -- In character, only count equipped Tools
             for _,item in ipairs(ch:GetChildren()) do
-                if item:IsA("Tool") then local n=item.Name; t[n]=(t[n] or 0)+1 end
+                if item:IsA("Tool") then
+                    local n = item.Name
+                    t[n] = (t[n] or 0) + 1
+                end
             end
         end
-        _invCache=t; _invDirty=false
+        _invCache = t
+        _invDirty = false
     end
 
-    local function onInvChanged() _invDirty=true end
+    local function onInvChanged() _invDirty = true end
     LocalPlayer.Backpack.ChildAdded:Connect(onInvChanged)
     LocalPlayer.Backpack.ChildRemoved:Connect(onInvChanged)
     LocalPlayer.CharacterAdded:Connect(function(char)
-        _invDirty=true
+        _invDirty = true
         char.ChildAdded:Connect(onInvChanged)
         char.ChildRemoved:Connect(onInvChanged)
     end)
@@ -594,7 +611,7 @@ do
         return _invCache[name] or 0
     end
     S.countItem    = countItem
-    S.markInvDirty = function() _invDirty=true end
+    S.markInvDirty = function() _invDirty = true end
 
     local function totalMS()    return S.patStats.small+S.patStats.medium+S.patStats.large end
     local function countAllMS() return countItem(CFG.ITEM_MS_SMALL)+countItem(CFG.ITEM_MS_MEDIUM)+countItem(CFG.ITEM_MS_LARGE) end
@@ -676,44 +693,28 @@ do
     end
 
     -- ============================================================
-    -- FIX: STATUS LABELS NOT UPDATING
-    -- Root cause: Lua's __newindex metamethod is only called when
-    -- a key does NOT already exist in the table. Pre-initialising
-    -- {Text="OFF"} means all future .Text="x" assignments bypass
-    -- __newindex silently. Even the "proxy" pattern from v9 had
-    -- a subtle issue where guiRefs could be nil during the first
-    -- call if _regAllRefs hadn't fired yet.
-    --
-    -- Fix: Use direct function callbacks stored in S.
-    -- GUI sets these after creating labels. Farming functions call
-    -- them directly — no metatable, no proxy, no timing issues.
+    -- STATUS LABEL SYSTEM
+    -- FIX: Direct callback functions instead of metatable/proxy.
+    -- GUI sets S._cbXxx immediately after creating each label.
+    -- Farming code calls S.setXxxDirect() — zero timing issues.
     -- ============================================================
-    S._cbStatus  = nil  -- function(text)
-    S._cbPhase   = nil  -- function(text)
-    S._cbTimer   = nil  -- function(text)
-    S._cbSafe    = nil  -- function(text)
-    S._cbSellSt  = nil  -- function(text)
-    S._cbSellIt  = nil  -- function(text)
+    S._cbStatus = nil
+    S._cbPhase  = nil
+    S._cbTimer  = nil
+    S._cbSafe   = nil
+    S._cbSellSt = nil
+    S._cbSellIt = nil
 
-    -- Internal state (read by GUI buttons to reset labels)
-    local _statusText  = "OFF"
-    local _phaseText   = "Water"
-    local _timerText   = "0s"
-
-    local function _setStatus(msg, color)
-        _statusText = msg
+    local function _setStatus(msg, _color)
         if S._cbStatus then pcall(S._cbStatus, msg) end
     end
     local function _setPhase(txt)
-        _phaseText = txt
         if S._cbPhase then pcall(S._cbPhase, txt) end
     end
     local function _setTimer(txt)
-        _timerText = txt
         if S._cbTimer then pcall(S._cbTimer, txt) end
     end
 
-    -- Expose for GUI STOP button to call directly
     S.setStatusDirect = _setStatus
     S.setPhaseDirect  = _setPhase
     S.setTimerDirect  = _setTimer
@@ -732,6 +733,10 @@ do
         return true
     end
 
+    -- ============================================================
+    -- TELEPORT HELPERS
+    -- fullyTeleport — used by farming (handles seated-in-vehicle case)
+    -- ============================================================
     local function moveVehicle(vehicle, targetPos)
         local anchor=vehicle.PrimaryPart or vehicle:FindFirstChildOfClass("VehicleSeat") or vehicle:FindFirstChildOfClass("BasePart")
         if not anchor then return end
@@ -767,6 +772,7 @@ do
     end
     S.fullyTeleport = fullyTeleport
 
+    -- Safe Mode
     RunService.Heartbeat:Connect(function(dt)
         if not S.safeMode then S.safeModeActive=false; S.safeModeTimer=0; return end
         local char=LocalPlayer.Character; local hum=char and char:FindFirstChildOfClass("Humanoid")
@@ -954,6 +960,7 @@ do
     end
     S.doAutoFully = doAutoFully
 
+    -- Auto-sell background loop
     task.spawn(function()
         while true do
             task.wait(0.4)
@@ -985,7 +992,7 @@ do
 
     -- ============================================================
     -- COMMUNICATION
-    -- Avatar cached once — prevents lag on every message send.
+    -- Avatar cached on load — prevents lag spike on first send.
     -- ============================================================
     Window:Category("Communication")
     local ChatPage   = Window:Page({Name="Server Chat",Icon="100050851789190",Columns=1})
@@ -994,11 +1001,13 @@ do
     local _cachedAvatar = nil
     local function getAvatar()
         if _cachedAvatar then return _cachedAvatar end
-        local ok,id=pcall(function() return Players:GetUserThumbnailAsync(LocalPlayer.UserId,Enum.ThumbnailType.HeadShot,Enum.ThumbnailSize.Size420x420) end)
-        _cachedAvatar=(ok and id) and id or "rbxassetid://78993485446406"
+        local ok,id = pcall(function()
+            return Players:GetUserThumbnailAsync(LocalPlayer.UserId,Enum.ThumbnailType.HeadShot,Enum.ThumbnailSize.Size420x420)
+        end)
+        _cachedAvatar = (ok and id) and id or "rbxassetid://78993485446406"
         return _cachedAvatar
     end
-    task.spawn(getAvatar) -- pre-fetch in background
+    task.spawn(getAvatar) -- pre-fetch so first send is instant
 
     GlobalChat:OnMessageSendPressed(function()
         GlobalChat:SendMessage(getAvatar(),LocalPlayer.DisplayName,GlobalChat:GetTypedMessage(),false)
@@ -1012,13 +1021,11 @@ do
     local pageAutoFully = Window:Page({Name="Auto Fully", Icon="108839695397679"})
     local pageSellBuy   = Window:Page({Name="Sell / Buy", Icon="126497581491926"})
 
-    -- Status display labels
+    -- Status labels — wired via direct callbacks immediately after creation
     local secStatus = pageAutoMS:Section({Name="Status Memasak",Side=1})
     local statusLbl = secStatus:Label("Status: OFF")
     local phaseLbl  = secStatus:Label("Phase: Water")
     local timerLbl  = secStatus:Label("Timer: 0s")
-
-    -- FIX: Wire direct callbacks to labels immediately after creation
     S._cbStatus = function(v) pcall(function() statusLbl:Set("Status: "..v) end) end
     S._cbPhase  = function(v) pcall(function() phaseLbl:Set("Phase: "..v)   end) end
     S._cbTimer  = function(v) pcall(function() timerLbl:Set("Timer: "..v)   end) end
@@ -1028,14 +1035,12 @@ do
     secCook:Button({Name="START Masak",Callback=function()
         if not S.isRunning then
             S.isRunning=true
-            S.setStatusDirect("STARTING",Color3.fromRGB(255,215,0))
-            task.spawn(S.autoMSLoop)
+            S.setStatusDirect("STARTING",nil); task.spawn(S.autoMSLoop)
         end
     end})
     secCook:Button({Name="STOP Masak",Callback=function()
         S.isRunning=false; S.AutoMS_Running=false
-        S.setStatusDirect("OFF",Color3.fromRGB(255,60,90))
-        S.setPhaseDirect("Water"); S.setTimerDirect("0s")
+        S.setStatusDirect("OFF",nil); S.setPhaseDirect("Water"); S.setTimerDirect("0s")
     end})
 
     -- Inventory display
@@ -1084,7 +1089,8 @@ do
             S.safeMode=v
             if v then
                 local ch=LocalPlayer.Character; local h=ch and ch:FindFirstChildOfClass("Humanoid")
-                if h then S.lastHealth=h.Health end; S.setSafeDirect("STANDBY")
+                if h then S.lastHealth=h.Health end
+                S.setSafeDirect("STANDBY")
             else
                 S.safeModeActive=false; S.setSafeDirect("OFF")
             end
@@ -1126,9 +1132,54 @@ do
     local pageTP      = Window:Page({Name="Teleport",Icon="123944728972740"})
     local pageVehicle = Window:Page({Name="Vehicle",  Icon="138827881557940"})
 
-    -- FIX: Kill-based teleport (die → respawn at destination).
-    -- More reliable than direct CFrame TP which gets corrected by
-    -- physics/anti-cheat on some servers.
+    -- ============================================================
+    -- COORDINATE SAVING SYSTEM
+    -- Captures current XYZ of HumanoidRootPart and stores it.
+    -- Separate from fullySavedPos — this is a general-purpose saved
+    -- position for instant TP back to any location.
+    -- ============================================================
+    S.savedCoords = nil
+
+    local secCoords = pageTP:Section({Name="Koordinat Tersimpan",Side=1})
+    local coordLbl  = secCoords:Label("Saved: Belum disimpan")
+
+    local function updateCoordLabel()
+        if S.savedCoords then
+            pcall(function()
+                coordLbl:Set(string.format("Saved: %.1f, %.1f, %.1f",
+                    S.savedCoords.X, S.savedCoords.Y, S.savedCoords.Z))
+            end)
+        else
+            pcall(function() coordLbl:Set("Saved: Belum disimpan") end)
+        end
+    end
+
+    secCoords:Button({Name="Simpan Posisi Sekarang",Callback=function()
+        local ch=LocalPlayer.Character; local hrp=ch and ch:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            S.savedCoords = hrp.Position
+            updateCoordLabel()
+        end
+    end})
+    secCoords:Button({Name="TP ke Posisi Tersimpan",Callback=function()
+        if not S.savedCoords then return end
+        local ch=LocalPlayer.Character; local hrp=ch and ch:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            local goal=CFrame.new(S.savedCoords+Vector3.new(0,3,0))
+            pcall(function() hrp.CFrame=goal end)
+            task.wait(0.05)
+            pcall(function() hrp.CFrame=goal end)
+        end
+    end})
+    secCoords:Button({Name="Hapus Posisi",Callback=function()
+        S.savedCoords=nil; updateCoordLabel()
+    end})
+
+    -- ============================================================
+    -- PLAYER TELEPORT (Kill → Respawn at destination)
+    -- Uses character-specific kill-and-respawn logic.
+    -- More reliable than raw CFrame on anti-cheat servers.
+    -- ============================================================
     local tpDestination = nil
     local tpPending     = false
 
@@ -1145,11 +1196,13 @@ do
     if LocalPlayer.Character then task.spawn(onCharAdded, LocalPlayer.Character) end
     LocalPlayer.CharacterAdded:Connect(onCharAdded)
 
-    local function tpTo(x,y,z)
+    -- playerTpTo: character-specific (kill-based) — independent of vehicle logic
+    local function playerTpTo(x, y, z)
         local ch=LocalPlayer.Character; local h=ch and ch:FindFirstChildOfClass("Humanoid")
-        tpDestination={x=x,y=y,z=z}; tpPending=true
+        tpDestination={x=x, y=y, z=z}; tpPending=true
         if ch and h and h.Health>0 then h.Health=0 end
     end
+    S.playerTpTo = playerTpTo
 
     local tpLocs = {
         {name="Dealership",  x=732.117, y=3.362, z=406.08},
@@ -1172,10 +1225,10 @@ do
     secTP:Dropdown({Name="Lokasi",Items=tpNames,Default=tpNames[1],
         Callback=function(val) for i,l in ipairs(tpLocs) do if l.name==val then selTPIdx=i; break end end end})
     secTP:Button({Name="Teleport!",Callback=function()
-        local l=tpLocs[selTPIdx]; if l then tpTo(l.x,l.y,l.z) end
+        local l=tpLocs[selTPIdx]; if l then playerTpTo(l.x,l.y,l.z) end
     end})
 
-    -- TP to Player
+    -- TP to Player (player-specific kill logic)
     local secTPP  = pageTP:Section({Name="TP ke Player",Side=2})
     local plNames = {}
     local selTPP  = nil
@@ -1211,19 +1264,30 @@ do
         for _,p in pairs(Players:GetPlayers()) do
             if p.Name==selTPP then
                 local t=p.Character and p.Character:FindFirstChild("HumanoidRootPart")
-                if t then tpTo(t.Position.X+2,t.Position.Y,t.Position.Z) end
+                if t then playerTpTo(t.Position.X+2,t.Position.Y,t.Position.Z) end
                 break
             end
         end
     end})
 
-    -- Vehicle TP
-    local cachedSeat=nil
+    -- ============================================================
+    -- VEHICLE MENU
+    -- Vehicle TP uses its own logic block: teleports the vehicle
+    -- model's PrimaryPart so the player stays seated without a kick.
+    -- This is fully independent of the player TP system above.
+    -- ============================================================
+
+    -- Cached seat reference — updated whenever player enters/leaves a seat
+    local cachedSeat = nil
     local function updSeat()
         local ch=LocalPlayer.Character; if not ch then cachedSeat=nil; return end
         for _,o in ipairs(ch:GetChildren()) do
-            if o:IsA("Humanoid") then local s=o.SeatPart; if s and (s:IsA("Seat") or s:IsA("VehicleSeat")) then cachedSeat=s; return end end
-        end; cachedSeat=nil
+            if o:IsA("Humanoid") then
+                local s=o.SeatPart
+                if s and (s:IsA("Seat") or s:IsA("VehicleSeat")) then cachedSeat=s; return end
+            end
+        end
+        cachedSeat=nil
     end
     local function hookVC(c)
         local h=c:WaitForChild("Humanoid",10); if not h then return end
@@ -1232,18 +1296,48 @@ do
     if LocalPlayer.Character then task.spawn(hookVC, LocalPlayer.Character) end
     LocalPlayer.CharacterAdded:Connect(function(c) task.spawn(hookVC,c) end)
 
-    local function tpVehicle(x,y,z)
+    -- vehicleTpTo: vehicle-specific logic — moves the vehicle model's
+    -- RootPart so the player remains seated and no glitch occurs.
+    local function vehicleTpTo(x, y, z)
         task.spawn(function()
             local ch=LocalPlayer.Character; if not ch then return end
             local hrp=ch:FindFirstChild("HumanoidRootPart"); if not hrp then return end
-            local sp=Vector3.new(x,y+2,z); local tcf=CFrame.new(sp,sp+Vector3.new(0,0,1))
+            local targetPos = Vector3.new(x, y+2, z)
+            local tcf       = CFrame.new(targetPos, targetPos+Vector3.new(0,0,1))
+
             if cachedSeat then
-                local vm=cachedSeat:FindFirstAncestorWhichIsA("Model")
-                if vm and vm.PrimaryPart then vm:SetPrimaryPartCFrame(tcf*(vm.PrimaryPart.CFrame:Inverse()*cachedSeat.CFrame):Inverse())
-                elseif vm then local d=tcf*cachedSeat.CFrame:Inverse(); for _,p in ipairs(vm:GetDescendants()) do if p:IsA("BasePart") then p.CFrame=d*p.CFrame end end end
-            else hrp.CFrame=tcf end
+                local vm = cachedSeat:FindFirstAncestorWhichIsA("Model")
+                if vm then
+                    -- Freeze, reposition, unfreeze — prevents physics ejection
+                    for _,p in ipairs(vm:GetDescendants()) do
+                        if p:IsA("BasePart") then
+                            pcall(function() p.AssemblyLinearVelocity=Vector3.zero; p.AssemblyAngularVelocity=Vector3.zero; p.Anchored=true end)
+                        end
+                    end
+                    task.wait(0.05)
+                    if vm.PrimaryPart then
+                        local offset = tcf * (vm.PrimaryPart.CFrame:Inverse() * cachedSeat.CFrame):Inverse()
+                        vm:SetPrimaryPartCFrame(offset)
+                    else
+                        local d = tcf * cachedSeat.CFrame:Inverse()
+                        for _,p in ipairs(vm:GetDescendants()) do
+                            if p:IsA("BasePart") then p.CFrame = d * p.CFrame end
+                        end
+                    end
+                    task.wait(0.05)
+                    for _,p in ipairs(vm:GetDescendants()) do
+                        if p:IsA("BasePart") then
+                            pcall(function() p.Anchored=false; p.AssemblyLinearVelocity=Vector3.zero; p.AssemblyAngularVelocity=Vector3.zero end)
+                        end
+                    end
+                    return
+                end
+            end
+            -- Fallback: no vehicle detected, just move character
+            hrp.CFrame = tcf
         end)
     end
+    S.vehicleTpTo = vehicleTpTo
 
     local vtpLocs = {
         {name="Dealership",  x=732.117, y=3.362, z=406.08},
@@ -1267,9 +1361,10 @@ do
     secVTP:Dropdown({Name="Lokasi",Items=vtpNames,Default=vtpNames[1],
         Callback=function(val) for i,l in ipairs(vtpLocs) do if l.name==val then selVTP=i; break end end end})
     secVTP:Button({Name="TP Kendaraan!",Callback=function()
-        local l=vtpLocs[selVTP]; if l then tpVehicle(l.x,l.y,l.z) end
+        local l=vtpLocs[selVTP]; if l then vehicleTpTo(l.x,l.y,l.z) end
     end})
 
+    -- Vehicle Fly
     local secVFly=pageVehicle:Section({Name="Vehicle Fly",Side=2})
     secVFly:Toggle({Name="Vehicle Fly",Default=false,Flag="VehicleFly",
         Callback=function(v) S.vFlyOn=v; if v then S.vFlyStart() else S.vFlyStop() end end})
@@ -1279,11 +1374,10 @@ do
 
     -- ============================================================
     -- COMBAT — Aimbot
-    -- Aim key system taken from Majesty Store:
-    --   Label shows current key. Click "Set Aim Key" → label shows
-    --   ">> PRESS ANY KEY <<". Press any key/mouse button → label
-    --   updates instantly to new key. Supports RMB, MMB, MB4, MB5,
-    --   and any keyboard key. LMB is excluded (used to click button).
+    -- Aim Key GUI Overhaul: single button whose text always shows
+    -- the live binding. Clicking it enters capture mode (text → "...").
+    -- Any non-LMB input sets the new key and updates the button label.
+    -- Default: RMB. Supports: RMB, MMB, MB4, MB5, any keyboard key.
     -- ============================================================
     Window:Category("Combat")
     local pageAimbot = Window:Page({Name="Aimbot",Icon="134236649319095"})
@@ -1292,20 +1386,37 @@ do
     secAim:Toggle({Name="Enable Aimbot",Default=false,Flag="AimbotToggle",
         Callback=function(v) S.aimOn=v; if not v then S.aimToggle=false end end})
 
-    -- Aim key label (shows current binding like "Aim Key: [RMB]")
-    local aimKeyLbl = secAim:Label("Aim Key: ["..S.aimKBLabel.."]")
+    -- Status label showing current live binding
+    local aimCurrentLbl = secAim:Label("Aim Key: [ RMB ]")
 
-    -- Wire label updater to the global capture handler
-    S._aimKeyLblSet = function(txt) pcall(function() aimKeyLbl:Set(txt) end) end
+    -- Single button that shows the live key and acts as the capture trigger.
+    -- When idle: "Binding: RMB — Click to Change"
+    -- When capturing: "Binding: ... Press any key"
+    local aimKeyBtn = secAim:Button({
+        Name = "Binding: "..S.aimKBLabel.." — Click to Change",
+        Callback = function()
+            if S.isBindingKey then return end
+            S.isBindingKey = true
+            pcall(function()
+                aimCurrentLbl:Set("Aim Key: [ ... Press any key ]")
+            end)
+            -- S._aimKeyLblSet is called by the global InputBegan
+            -- handler in the Aimbot block once a key is captured.
+        end
+    })
 
-    -- "Set Aim Key" button — click, then press any key/mouse button
-    secAim:Button({Name="Set Aim Key",Callback=function()
-        if S.isBindingKey then return end
-        S.isBindingKey = true
-        pcall(function() aimKeyLbl:Set("Aim Key: [>> PRESS ANY KEY <<]") end)
-        -- Global InputBegan handler in Aimbot do-block will capture
-        -- the next non-LMB input and call S._aimKeyLblSet automatically.
-    end})
+    -- Wire the label updater — called by global capture handler
+    S._aimKeyLblSet = function(newLabel)
+        -- Update the status label
+        pcall(function() aimCurrentLbl:Set("Aim Key: [ "..newLabel.." ]") end)
+        -- Update the button face text by re-using the Section button name
+        -- (Mentality's Button:Set() if available, else label only)
+        pcall(function()
+            if aimKeyBtn and aimKeyBtn.Set then
+                aimKeyBtn:Set("Binding: "..newLabel.." — Click to Change")
+            end
+        end)
+    end
 
     secAim:Dropdown({Name="Mode",  Default="Hold",  Items={"Hold","Toggle"},   Callback=function(v) S.aimKBMode=v; S.aimToggle=false end})
     secAim:Dropdown({Name="Method",Default="Camera",Items={"Camera","FreeAim"},Callback=function(v) S.aimMode=v end})
@@ -1321,12 +1432,12 @@ do
     fovColLbl:Colorpicker({Name="Color",Default=Color3.fromRGB(0,196,255),Callback=function(v) S.aimFovCol=v end})
 
     local secSmooth=pageAimbot:Section({Name="Smoothing",Side=2})
-    secSmooth:Slider({Name="Smoothness",  Min=0,Max=20,Default=5,    Suffix="",  Callback=function(v) S.aimSmooth=v   end})
-    secSmooth:Toggle({Name="Prediction",  Default=false,Flag="AimbotPrediction", Callback=function(v) S.aimPred=v    end})
-    secSmooth:Slider({Name="Pred Strength",Min=0,Max=1,Default=0.165,Decimals=3,Suffix="",Callback=function(v) S.aimPredStr=v end})
+    secSmooth:Slider({Name="Smoothness",   Min=0,Max=20,Default=5,    Suffix="",  Callback=function(v) S.aimSmooth=v   end})
+    secSmooth:Toggle({Name="Prediction",   Default=false,Flag="AimbotPrediction", Callback=function(v) S.aimPred=v    end})
+    secSmooth:Slider({Name="Pred Strength",Min=0,Max=1,  Default=0.165,Decimals=3,Suffix="",Callback=function(v) S.aimPredStr=v end})
 
     -- ============================================================
-    -- VISUALS
+    -- VISUALS — ESP + Whitelist
     -- ============================================================
     Window:Category("Visuals")
     local pageESP = Window:Page({Name="ESP",       Icon="100050851789190"})
@@ -1385,8 +1496,7 @@ do
     task.defer(function()
         Window:Init()
 
-        -- Inventory refresh loop: force rebuild every second so
-        -- labels always show accurate counts.
+        -- Inventory: force rebuild every second regardless of events
         task.spawn(function()
             while true do
                 task.wait(1)
