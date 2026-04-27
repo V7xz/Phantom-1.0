@@ -561,10 +561,7 @@ do
     }
 
     -- ============================================================
-    -- INVENTORY TRACKER
-    -- FIX: Scans ALL Backpack children by Name (not just Tools)
-    -- so Water, Sugar Block Bag, Gelatin, Empty Bag are counted.
-    -- Force-rebuilds every second via S.markInvDirty() in GUI loop.
+    -- INVENTORY TRACKER — FIXED: Scans ALL Backpack children by Name
     -- ============================================================
     local _invCache = {}
     local _invDirty = true
@@ -573,7 +570,6 @@ do
         local t  = {}
         local bp = LocalPlayer.Backpack
         if bp then
-            -- Count ALL items in backpack regardless of class
             for _,item in ipairs(bp:GetChildren()) do
                 local n = item.Name
                 if n and n ~= "" then t[n] = (t[n] or 0) + 1 end
@@ -581,7 +577,6 @@ do
         end
         local ch = LocalPlayer.Character
         if ch then
-            -- In character, only count equipped Tools
             for _,item in ipairs(ch:GetChildren()) do
                 if item:IsA("Tool") then
                     local n = item.Name
@@ -693,10 +688,7 @@ do
     end
 
     -- ============================================================
-    -- STATUS LABEL SYSTEM
-    -- FIX: Direct callback functions instead of metatable/proxy.
-    -- GUI sets S._cbXxx immediately after creating each label.
-    -- Farming code calls S.setXxxDirect() — zero timing issues.
+    -- STATUS LABEL SYSTEM — Direct callbacks (fixed sync)
     -- ============================================================
     S._cbStatus = nil
     S._cbPhase  = nil
@@ -735,7 +727,6 @@ do
 
     -- ============================================================
     -- TELEPORT HELPERS
-    -- fullyTeleport — used by farming (handles seated-in-vehicle case)
     -- ============================================================
     local function moveVehicle(vehicle, targetPos)
         local anchor=vehicle.PrimaryPart or vehicle:FindFirstChildOfClass("VehicleSeat") or vehicle:FindFirstChildOfClass("BasePart")
@@ -992,7 +983,6 @@ do
 
     -- ============================================================
     -- COMMUNICATION
-    -- Avatar cached on load — prevents lag spike on first send.
     -- ============================================================
     Window:Category("Communication")
     local ChatPage   = Window:Page({Name="Server Chat",Icon="100050851789190",Columns=1})
@@ -1007,7 +997,7 @@ do
         _cachedAvatar = (ok and id) and id or "rbxassetid://78993485446406"
         return _cachedAvatar
     end
-    task.spawn(getAvatar) -- pre-fetch so first send is instant
+    task.spawn(getAvatar)
 
     GlobalChat:OnMessageSendPressed(function()
         GlobalChat:SendMessage(getAvatar(),LocalPlayer.DisplayName,GlobalChat:GetTypedMessage(),false)
@@ -1021,7 +1011,6 @@ do
     local pageAutoFully = Window:Page({Name="Auto Fully", Icon="108839695397679"})
     local pageSellBuy   = Window:Page({Name="Sell / Buy", Icon="126497581491926"})
 
-    -- Status labels — wired via direct callbacks immediately after creation
     local secStatus = pageAutoMS:Section({Name="Status Memasak",Side=1})
     local statusLbl = secStatus:Label("Status: OFF")
     local phaseLbl  = secStatus:Label("Phase: Water")
@@ -1030,20 +1019,20 @@ do
     S._cbPhase  = function(v) pcall(function() phaseLbl:Set("Phase: "..v)   end) end
     S._cbTimer  = function(v) pcall(function() timerLbl:Set("Timer: "..v)   end) end
 
-    -- Cooking controls
     local secCook = pageAutoMS:Section({Name="Kontrol Masak",Side=2})
     secCook:Button({Name="START Masak",Callback=function()
         if not S.isRunning then
             S.isRunning=true
-            S.setStatusDirect("STARTING",nil); task.spawn(S.autoMSLoop)
+            S.setStatusDirect("STARTING")
+            task.spawn(S.autoMSLoop)
         end
     end})
     secCook:Button({Name="STOP Masak",Callback=function()
         S.isRunning=false; S.AutoMS_Running=false
-        S.setStatusDirect("OFF",nil); S.setPhaseDirect("Water"); S.setTimerDirect("0s")
+        S.setStatusDirect("OFF")
+        S.setPhaseDirect("Water"); S.setTimerDirect("0s")
     end})
 
-    -- Inventory display
     local secInv   = pageAutoMS:Section({Name="Inventory",Side=1})
     local waterLbl = secInv:Label("Water: 0")
     local gelLbl   = secInv:Label("Gelatin: 0")
@@ -1051,7 +1040,6 @@ do
     local bagLbl   = secInv:Label("Empty Bag: 0")
     local msBagLbl = secInv:Label("MS Bag: 0")
 
-    -- Auto Fully
     local secFullyStat  = pageAutoFully:Section({Name="Status",Side=1})
     local _fullyStatLbl = secFullyStat:Label("Belum dimulai")
     local secFullyCtrl  = pageAutoFully:Section({Name="Kontrol",Side=1})
@@ -1080,7 +1068,6 @@ do
         pcall(function() _fullyStatLbl:Set("Stopped") end)
     end})
 
-    -- Safe Mode
     local secSafeMode = pageAutoFully:Section({Name="Safe Mode",Side=2})
     local safeLblEl   = secSafeMode:Label("Safe Mode: OFF")
     S._cbSafe = function(v) pcall(function() safeLblEl:Set("Safe Mode: "..v) end) end
@@ -1096,7 +1083,6 @@ do
             end
         end})
 
-    -- Auto Sell
     local secAutoSell = pageSellBuy:Section({Name="Auto Sell",Side=1})
     local sellStatLbl = secAutoSell:Label("Status: OFF")
     local sellItemEl  = secAutoSell:Label("Item: -")
@@ -1105,14 +1091,18 @@ do
     secAutoSell:Toggle({Name="Auto Sell",Default=false,Flag="AutoSellToggle",
         Callback=function(v)
             S.autoSell_UI=v
-            if not v then S.asSelling=false; S.setSellStDirect("OFF"); S.setSellItDirect("-")
-            else S.setSellStDirect("ON") end
+            if not v then 
+                S.asSelling=false
+                S.setSellStDirect("OFF")
+                S.setSellItDirect("-")
+            else 
+                S.setSellStDirect("ON") 
+            end
         end})
     secAutoSell:Button({Name="Jual Sekarang",Callback=function()
         task.spawn(function() S.doAutoSell(function(msg) S.setSellStDirect(msg); S.setSellItDirect(msg) end) end)
     end})
 
-    -- Buy
     local secBuy = pageSellBuy:Section({Name="Buy Bahan",Side=2})
     local buyW=1; local buyG=1; local buySu=1
     secBuy:Slider({Name="Water",  Min=0,Max=50,Default=1,Suffix=" x",Callback=function(v) buyW=v   end})
@@ -1133,10 +1123,7 @@ do
     local pageVehicle = Window:Page({Name="Vehicle",  Icon="138827881557940"})
 
     -- ============================================================
-    -- COORDINATE SAVING SYSTEM
-    -- Captures current XYZ of HumanoidRootPart and stores it.
-    -- Separate from fullySavedPos — this is a general-purpose saved
-    -- position for instant TP back to any location.
+    -- COORDINATE SAVING SYSTEM (New Feature)
     -- ============================================================
     S.savedCoords = nil
 
@@ -1176,10 +1163,8 @@ do
     end})
 
     -- ============================================================
-    -- PLAYER TELEPORT (Kill → Respawn at destination)
-    -- Uses character-specific kill-and-respawn logic.
-    -- More reliable than raw CFrame on anti-cheat servers.
-    -- ============================================================
+    -- PLAYER TELEPORT (Separate logic block — kill & respawn)
+    -- ================================================================
     local tpDestination = nil
     local tpPending     = false
 
@@ -1196,7 +1181,6 @@ do
     if LocalPlayer.Character then task.spawn(onCharAdded, LocalPlayer.Character) end
     LocalPlayer.CharacterAdded:Connect(onCharAdded)
 
-    -- playerTpTo: character-specific (kill-based) — independent of vehicle logic
     local function playerTpTo(x, y, z)
         local ch=LocalPlayer.Character; local h=ch and ch:FindFirstChildOfClass("Humanoid")
         tpDestination={x=x, y=y, z=z}; tpPending=true
@@ -1228,7 +1212,6 @@ do
         local l=tpLocs[selTPIdx]; if l then playerTpTo(l.x,l.y,l.z) end
     end})
 
-    -- TP to Player (player-specific kill logic)
     local secTPP  = pageTP:Section({Name="TP ke Player",Side=2})
     local plNames = {}
     local selTPP  = nil
@@ -1253,7 +1236,7 @@ do
     end)
     Players.PlayerRemoving:Connect(function()
         task.wait(0.3); updPl(); pcall(function() plDD.Items=plNames end)
-    end)
+    end})
 
     secTPP:Button({Name="Refresh",Callback=function()
         updPl(); pcall(function() plDD.Items=plNames end)
@@ -1271,13 +1254,8 @@ do
     end})
 
     -- ============================================================
-    -- VEHICLE MENU
-    -- Vehicle TP uses its own logic block: teleports the vehicle
-    -- model's PrimaryPart so the player stays seated without a kick.
-    -- This is fully independent of the player TP system above.
-    -- ============================================================
-
-    -- Cached seat reference — updated whenever player enters/leaves a seat
+    -- VEHICLE TELEPORT (Separate logic block — moves vehicle model)
+    -- ================================================================
     local cachedSeat = nil
     local function updSeat()
         local ch=LocalPlayer.Character; if not ch then cachedSeat=nil; return end
@@ -1296,8 +1274,6 @@ do
     if LocalPlayer.Character then task.spawn(hookVC, LocalPlayer.Character) end
     LocalPlayer.CharacterAdded:Connect(function(c) task.spawn(hookVC,c) end)
 
-    -- vehicleTpTo: vehicle-specific logic — moves the vehicle model's
-    -- RootPart so the player remains seated and no glitch occurs.
     local function vehicleTpTo(x, y, z)
         task.spawn(function()
             local ch=LocalPlayer.Character; if not ch then return end
@@ -1308,7 +1284,6 @@ do
             if cachedSeat then
                 local vm = cachedSeat:FindFirstAncestorWhichIsA("Model")
                 if vm then
-                    -- Freeze, reposition, unfreeze — prevents physics ejection
                     for _,p in ipairs(vm:GetDescendants()) do
                         if p:IsA("BasePart") then
                             pcall(function() p.AssemblyLinearVelocity=Vector3.zero; p.AssemblyAngularVelocity=Vector3.zero; p.Anchored=true end)
@@ -1333,7 +1308,6 @@ do
                     return
                 end
             end
-            -- Fallback: no vehicle detected, just move character
             hrp.CFrame = tcf
         end)
     end
@@ -1364,7 +1338,6 @@ do
         local l=vtpLocs[selVTP]; if l then vehicleTpTo(l.x,l.y,l.z) end
     end})
 
-    -- Vehicle Fly
     local secVFly=pageVehicle:Section({Name="Vehicle Fly",Side=2})
     secVFly:Toggle({Name="Vehicle Fly",Default=false,Flag="VehicleFly",
         Callback=function(v) S.vFlyOn=v; if v then S.vFlyStart() else S.vFlyStop() end end})
@@ -1373,12 +1346,8 @@ do
     secVFly:Label("WASD = Move | E = Up | Q = Down")
 
     -- ============================================================
-    -- COMBAT — Aimbot
-    -- Aim Key GUI Overhaul: single button whose text always shows
-    -- the live binding. Clicking it enters capture mode (text → "...").
-    -- Any non-LMB input sets the new key and updates the button label.
-    -- Default: RMB. Supports: RMB, MMB, MB4, MB5, any keyboard key.
-    -- ============================================================
+    -- COMBAT — Aimbot (Advanced non-interactive Aim Key display)
+    -- ================================================================
     Window:Category("Combat")
     local pageAimbot = Window:Page({Name="Aimbot",Icon="134236649319095"})
     local secAim     = pageAimbot:Section({Name="Aimbot",Side=1})
@@ -1386,35 +1355,12 @@ do
     secAim:Toggle({Name="Enable Aimbot",Default=false,Flag="AimbotToggle",
         Callback=function(v) S.aimOn=v; if not v then S.aimToggle=false end end})
 
-    -- Status label showing current live binding
     local aimCurrentLbl = secAim:Label("Aim Key: [ RMB ]")
 
-    -- Single button that shows the live key and acts as the capture trigger.
-    -- When idle: "Binding: RMB — Click to Change"
-    -- When capturing: "Binding: ... Press any key"
-    local aimKeyBtn = secAim:Button({
-        Name = "Binding: "..S.aimKBLabel.." — Click to Change",
-        Callback = function()
-            if S.isBindingKey then return end
-            S.isBindingKey = true
-            pcall(function()
-                aimCurrentLbl:Set("Aim Key: [ ... Press any key ]")
-            end)
-            -- S._aimKeyLblSet is called by the global InputBegan
-            -- handler in the Aimbot block once a key is captured.
-        end
-    })
-
-    -- Wire the label updater — called by global capture handler
+    -- Advanced non-interactive display using pasted logic (RMB default)
     S._aimKeyLblSet = function(newLabel)
-        -- Update the status label
-        pcall(function() aimCurrentLbl:Set("Aim Key: [ "..newLabel.." ]") end)
-        -- Update the button face text by re-using the Section button name
-        -- (Mentality's Button:Set() if available, else label only)
-        pcall(function()
-            if aimKeyBtn and aimKeyBtn.Set then
-                aimKeyBtn:Set("Binding: "..newLabel.." — Click to Change")
-            end
+        pcall(function() 
+            aimCurrentLbl:Set("Aim Key: [ "..newLabel.." ]") 
         end)
     end
 
@@ -1455,7 +1401,6 @@ do
     secESPOpt:Label("Shows: Box, Name, HP,")
     secESPOpt:Label("Distance, Tool, Skeleton")
 
-    -- Whitelist
     local secWL=pageWL:Section({Name="Whitelist",Side=1})
     secWL:Label("Ignored by ESP & Aimbot")
     local function getWLText()
@@ -1488,7 +1433,7 @@ do
     end)
     Players.PlayerRemoving:Connect(function()
         task.wait(0.3); updateWL(); pcall(function() wlDD.Items=wlPN end)
-    end)
+    end})
 
     -- ============================================================
     -- INIT + RUNTIME LOOPS
@@ -1496,7 +1441,7 @@ do
     task.defer(function()
         Window:Init()
 
-        -- Inventory: force rebuild every second regardless of events
+        -- Inventory: force rebuild every second
         task.spawn(function()
             while true do
                 task.wait(1)
