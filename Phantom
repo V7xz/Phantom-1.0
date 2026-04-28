@@ -70,13 +70,15 @@ local AIM_PRESET_LABELS = {}
 for _,p in ipairs(AIM_KEY_PRESETS) do table.insert(AIM_PRESET_LABELS, p.label) end
 
 -- ================================================================
--- ESP SYSTEM (with separate toggles: Box, Health Bar, Distance, Skeleton)
+-- ESP SYSTEM (with separate toggles: Box, Health Bar, Distance, Skeleton, Name, Item)
 -- ================================================================
 do
     S.ESP_BOX      = false
     S.ESP_HPBAR    = false
     S.ESP_DISTANCE = false
     S.ESP_SKELETON = false
+    S.ESP_NAME     = false   -- new
+    S.ESP_ITEM     = false   -- new
     S.ESP_MAX_DIST = 500
     S.ESP_BOX_COLOR = Color3.fromRGB(0, 255, 255)
     S._espPrev = false
@@ -130,7 +132,6 @@ do
         if plr == LocalPlayer then return end
         if ESP_OBJ[plr] then return end
         local d = {}
-        -- Box corners (4 pairs of lines)
         if not d.Box then d.Box = {} end
         for _ = 1, 4 do
             local h = Drawing.new("Line"); h.Visible=false; h.Color=S.ESP_BOX_COLOR; h.Thickness=1.5
@@ -171,8 +172,8 @@ do
     end
 
     local function updateESP(plr, cam, myHRP)
-        local anyToggle = S.ESP_BOX or S.ESP_HPBAR or S.ESP_DISTANCE or S.ESP_SKELETON
-        if not anyToggle then hide(d); return end
+        local anyToggle = S.ESP_BOX or S.ESP_HPBAR or S.ESP_DISTANCE or S.ESP_SKELETON or S.ESP_NAME or S.ESP_ITEM
+        if not anyToggle then return end  -- don't process if nothing enabled
 
         local d = ESP_OBJ[plr]; if not d then return end
         local char = plr.Character
@@ -214,7 +215,7 @@ do
         local col = plr.Team and plr.Team.TeamColor.Color or S.ESP_BOX_COLOR
         local cl  = math.min(w, h) * 0.25
 
-        -- Box (only if toggle)
+        -- Box
         if S.ESP_BOX and d.Box then
             d.Box[1][1].From=Vector2.new(bx,by);     d.Box[1][1].To=Vector2.new(bx+cl,by);     d.Box[1][1].Color=col; d.Box[1][1].Visible=true
             d.Box[1][2].From=Vector2.new(bx,by);     d.Box[1][2].To=Vector2.new(bx,by+cl);     d.Box[1][2].Color=col; d.Box[1][2].Visible=true
@@ -226,24 +227,34 @@ do
             d.Box[4][2].From=Vector2.new(bx+w,by+h); d.Box[4][2].To=Vector2.new(bx+w,by+h-cl); d.Box[4][2].Color=col; d.Box[4][2].Visible=true
         end
 
-        d.Name.Text=plr.Name; d.Name.Position=Vector2.new(centerX,by-16); d.Name.Visible=true  -- Name always visible with Box? We'll keep as is unless we want toggle for name. Not requested.
+        -- Name
+        if S.ESP_NAME then
+            d.Name.Text=plr.Name; d.Name.Position=Vector2.new(centerX,by-16); d.Name.Visible=true
+        else
+            if d.Name.Visible then d.Name.Visible=false end
+        end
 
-        -- Distance (only if toggle)
+        -- Distance
         if S.ESP_DISTANCE then
             d.Dist.Text=string.format("[%.0fm]",dist3D); d.Dist.Position=Vector2.new(centerX,by+h+4); d.Dist.Visible=true
         else
             if d.Dist.Visible then d.Dist.Visible=false end
         end
 
-        local toolName=nil
-        for _,obj in ipairs(char:GetChildren()) do if obj:IsA("Tool") then toolName=obj.Name; break end end
-        if toolName then
-            d.Item.Text="["..toolName.."]"; d.Item.Position=Vector2.new(centerX,by+h+16); d.Item.Visible=true
+        -- Held item
+        if S.ESP_ITEM then
+            local toolName=nil
+            for _,obj in ipairs(char:GetChildren()) do if obj:IsA("Tool") then toolName=obj.Name; break end end
+            if toolName then
+                d.Item.Text="["..toolName.."]"; d.Item.Position=Vector2.new(centerX,by+h+16); d.Item.Visible=true
+            else
+                if d.Item.Visible then d.Item.Visible=false end
+            end
         else
             if d.Item.Visible then d.Item.Visible=false end
         end
 
-        -- Health bar (only if toggle)
+        -- Health bar
         if S.ESP_HPBAR then
             local r   = math.clamp(hum.Health/math.max(hum.MaxHealth,1),0,1)
             local hh  = math.max(2, h*r)
@@ -257,7 +268,7 @@ do
             if d.HPFill.Visible then d.HPFill.Visible=false end
         end
 
-        -- Skeleton (only if toggle)
+        -- Skeleton
         if S.ESP_SKELETON then
             for i=1,#BONES do
                 local b=d.Bones[i]; local p1=getPartFB(char,BONES[i][1]); local p2=getPartFB(char,BONES[i][2])
@@ -285,7 +296,7 @@ do
     local _ea = 0
     RunService.Heartbeat:Connect(function(dt)
         _ea = _ea + dt
-        local anyToggle = S.ESP_BOX or S.ESP_HPBAR or S.ESP_DISTANCE or S.ESP_SKELETON
+        local anyToggle = S.ESP_BOX or S.ESP_HPBAR or S.ESP_DISTANCE or S.ESP_SKELETON or S.ESP_NAME or S.ESP_ITEM
         if not anyToggle then
             if S._espPrev then for _,d in pairs(ESP_OBJ) do hide(d) end; S._espPrev=false end
             return
@@ -527,7 +538,7 @@ do
 end
 
 -- ================================================================
--- SILENT AIM (v2 logic – best version)
+-- SILENT AIM (v2 logic – best version, with fixes)
 -- ================================================================
 do
     S.silentAim         = false
@@ -545,7 +556,6 @@ do
     silentAimCircle.Transparency = 0.6
     silentAimCircle.Filled = false
 
-    -- Update circle position and visibility
     RunService.RenderStepped:Connect(function()
         silentAimCircle.Position = UserInputService:GetMouseLocation()
         silentAimCircle.Radius = S.silentAimFOV
@@ -556,7 +566,7 @@ do
         local Target = nil
         local LowestDistance = math.huge
         for _, v in ipairs(Players:GetPlayers()) do
-            if v ~= LocalPlayer then
+            if v ~= LocalPlayer and not S.whitelist[v.Name] then   -- whitelist fix
                 local Char = v.Character
                 if Char then
                     local Part = Char:FindFirstChild(S.silentAimPart) or Char:FindFirstChild("HumanoidRootPart") or Char:FindFirstChild("Head")
@@ -577,7 +587,6 @@ do
         return Target
     end
 
-    -- FastCast hook setup (retries)
     local FastCastHooked = false
     local retryAttempts = 0
     local MAX_RETRIES = 5
@@ -592,7 +601,6 @@ do
         local CastBlacklistFunc = nil
         local CastWhitelistFunc = nil
 
-        -- Find FastCast module
         local FastCastModule = nil
         for _, v in pairs(getgc(true)) do
             if type(v) == "table" and rawget(v, "FireWithBlacklist") then
@@ -633,8 +641,6 @@ do
                 hookfunction(CastBlacklistFunc, function(...)
                     local args = {...}
                     local origin = args[1]
-                    local direction = args[2]
-                    local blacklist = args[3]
                     if S.silentAim then
                         local circlePos = silentAimCircle.Position
                         local radius = silentAimCircle.Radius
@@ -644,7 +650,7 @@ do
                             if part then
                                 local newDir = part.Position - origin
                                 if S.silentAimMaxDist > 0 and newDir.Magnitude > S.silentAimMaxDist then
-                                    -- Beyond max distance, use original direction? Or just pass? We'll pass original.
+                                    -- beyond max distance, ignore
                                 else
                                     args[2] = newDir
                                     if S.silentAimWallbang then
@@ -668,21 +674,27 @@ do
         return false
     end
 
-    -- Attempt to hook with delays
-    task.wait(0.5)
-    SetupFastCastHook()
-    if not FastCastHooked then
-        task.wait(2)
+    -- Retry hook over time and on character respawn
+    task.spawn(function()
+        task.wait(0.5)
         SetupFastCastHook()
-    end
-    if not FastCastHooked then
-        task.wait(3)
-        SetupFastCastHook()
-    end
+        if not FastCastHooked then task.wait(2); SetupFastCastHook() end
+        if not FastCastHooked then task.wait(3); SetupFastCastHook() end
+        -- after respawn
+        LocalPlayer.CharacterAdded:Connect(function()
+            task.wait(1)
+            if not FastCastHooked then
+                retryAttempts = 0  -- reset retries
+                SetupFastCastHook()
+                if not FastCastHooked then task.wait(2); SetupFastCastHook() end
+                if not FastCastHooked then task.wait(3); SetupFastCastHook() end
+            end
+        end)
+    end)
 end
 
 -- ================================================================
--- FARMING SYSTEM (status messages converted to English)
+-- FARMING SYSTEM (status messages in English)
 -- ================================================================
 do
     S.AutoMS_Running = false
@@ -849,7 +861,7 @@ do
         return nil
     end
 
-    -- Status label system (English messages)
+    -- Status label system (English messages, fixed robust output)
     S._cbStatus = nil
     S._cbPhase  = nil
     S._cbTimer  = nil
@@ -857,22 +869,37 @@ do
     S._cbSellSt = nil
     S._cbSellIt = nil
 
+    -- Robust label setter: tries .Text first, then :Set()
+    local function setLabel(lbl, text)
+        if not lbl then return end
+        local ok, err = pcall(function() lbl.Text = text end)
+        if not ok then
+            pcall(function() lbl:Set(text) end)
+        end
+    end
+
     local function _setStatus(msg, _color)
-        if S._cbStatus then pcall(S._cbStatus, msg) end
+        if S._cbStatus then pcall(function() setLabel(S._cbStatus, "Status: "..msg) end) end
     end
     local function _setPhase(txt)
-        if S._cbPhase then pcall(S._cbPhase, txt) end
+        if S._cbPhase then pcall(function() setLabel(S._cbPhase, "Phase: "..txt) end) end
     end
     local function _setTimer(txt)
-        if S._cbTimer then pcall(S._cbTimer, txt) end
+        if S._cbTimer then pcall(function() setLabel(S._cbTimer, "Timer: "..txt) end) end
     end
 
     S.setStatusDirect = _setStatus
     S.setPhaseDirect  = _setPhase
     S.setTimerDirect  = _setTimer
-    S.setSafeDirect   = function(txt) if S._cbSafe   then pcall(S._cbSafe,   txt) end end
-    S.setSellStDirect = function(txt) if S._cbSellSt then pcall(S._cbSellSt, txt) end end
-    S.setSellItDirect = function(txt) if S._cbSellIt then pcall(S._cbSellIt, txt) end end
+    S.setSafeDirect   = function(txt)
+        if S._cbSafe then pcall(function() setLabel(S._cbSafe, "Safe Mode: "..txt) end) end
+    end
+    S.setSellStDirect = function(txt)
+        if S._cbSellSt then pcall(function() setLabel(S._cbSellSt, "Status: "..txt) end) end
+    end
+    S.setSellItDirect = function(txt)
+        if S._cbSellIt then pcall(function() setLabel(S._cbSellIt, "Item: "..txt) end) end
+    end
 
     local function countdown(secs, phaseTxt, color)
         for i=secs,1,-1 do
@@ -1139,6 +1166,15 @@ do
     local KeybindList = Library:KeybindList("Phantom keybind")
     local Window      = Library:Window({Name="Phantom.wtf",SubName="v1.0.0",Logo="108284603654233"})
 
+    -- Robust label setter for GUI (same as farming)
+    local function setLabel(lbl, text)
+        if not lbl then return end
+        local ok, err = pcall(function() lbl.Text = text end)
+        if not ok then
+            pcall(function() lbl:Set(text) end)
+        end
+    end
+
     -- ============================================================
     -- COMMUNICATION
     -- ============================================================
@@ -1174,9 +1210,9 @@ do
     local statusLbl = secStatus:Label("Status: OFF")
     local phaseLbl  = secStatus:Label("Phase: Water")
     local timerLbl  = secStatus:Label("Timer: 0s")
-    S._cbStatus = function(v) pcall(function() statusLbl:Set("Status: "..v) end) end
-    S._cbPhase  = function(v) pcall(function() phaseLbl:Set("Phase: "..v)   end) end
-    S._cbTimer  = function(v) pcall(function() timerLbl:Set("Timer: "..v)   end) end
+    S._cbStatus = statusLbl   -- store label reference directly
+    S._cbPhase  = phaseLbl
+    S._cbTimer  = timerLbl
 
     -- Cooking Controls
     local secCook = pageAutoMS:Section({Name="Cooking Control",Side=2})
@@ -1216,21 +1252,21 @@ do
         if S.fullyRunning then return end
         local ch=LocalPlayer.Character; local h=ch and ch:FindFirstChildOfClass("Humanoid")
         if h then S.lastHealth=h.Health end
-        pcall(function() _fullyStatLbl:Set("Running...") end)
+        pcall(function() setLabel(_fullyStatLbl, "Running...") end)
         task.spawn(function()
-            S.doAutoFully(function(msg) pcall(function() _fullyStatLbl:Set(msg) end) end)
-            pcall(function() _fullyStatLbl:Set("Stopped") end)
+            S.doAutoFully(function(msg) pcall(function() setLabel(_fullyStatLbl, msg) end) end)
+            pcall(function() setLabel(_fullyStatLbl, "Stopped") end)
         end)
     end})
     secFullyCtrl:Button({Name="STOP Auto Fully",Callback=function()
         S.fullyRunning=false; S.isRunning=false; S.AutoMS_Running=false; S.safeModeActive=false
-        pcall(function() _fullyStatLbl:Set("Stopped") end)
+        pcall(function() setLabel(_fullyStatLbl, "Stopped") end)
     end})
 
     -- Safe Mode
     local secSafeMode = pageAutoFully:Section({Name="Safe Mode",Side=2})
     local safeLblEl   = secSafeMode:Label("Safe Mode: OFF")
-    S._cbSafe = function(v) pcall(function() safeLblEl:Set("Safe Mode: "..v) end) end
+    S._cbSafe = safeLblEl   -- store label for direct update
     secSafeMode:Toggle({Name="Enable Safe Mode",Default=false,Flag="SafeMode",
         Callback=function(v)
             S.safeMode=v
@@ -1246,8 +1282,8 @@ do
     local secAutoSell = pageSellBuy:Section({Name="Auto Sell",Side=1})
     local sellStatLbl = secAutoSell:Label("Status: OFF")
     local sellItemEl  = secAutoSell:Label("Item: -")
-    S._cbSellSt = function(v) pcall(function() sellStatLbl:Set("Status: "..v) end) end
-    S._cbSellIt = function(v) pcall(function() sellItemEl:Set("Item: "..v)   end) end
+    S._cbSellSt = sellStatLbl
+    S._cbSellIt = sellItemEl
     secAutoSell:Toggle({Name="Auto Sell",Default=false,Flag="AutoSellToggle",
         Callback=function(v)
             S.autoSell_UI=v
@@ -1267,7 +1303,7 @@ do
     secBuy:Button({Name="Buy Now",Callback=function()
         task.spawn(function()
             S.buyQty[1]=buyG; S.buyQty[2]=buySu; S.buyQty[3]=buyW
-            S.doAutoBuy(function(msg) pcall(function() sellStatLbl:Set(msg) end) end)
+            S.doAutoBuy(function(msg) pcall(function() setLabel(sellStatLbl, msg) end) end)
         end)
     end})
 
@@ -1548,7 +1584,7 @@ do
         Callback=function(v) S.aimOn=v; if not v then S.aimToggle=false end end})
     local aimKeyStatusLbl = secAim:Label("Aim Key: [ RMB ]")
     S._aimKeyLblSet = function(newLabel)
-        pcall(function() aimKeyStatusLbl:Set("Aim Key: [ "..newLabel.." ]") end)
+        setLabel(aimKeyStatusLbl, "Aim Key: [ "..newLabel.." ]")
     end
     secAim:Dropdown({
         Name    = "Aim Key",
@@ -1591,7 +1627,7 @@ do
     local secSilent = pageAimbot:Section({Name="Silent Aim",Side=1})
     secSilent:Toggle({Name="Enable Silent Aim",Default=false,Flag="SilentAimToggle",
         Callback=function(v) S.silentAim=v end})
-    secSilent:Dropdown({Name="Silent Aim Target Part",Default="HumanoidRootPart",Items={"Head","HumanoidRootPart"},
+    secSilent:Dropdown({Name="Target Part",Default="HumanoidRootPart",Items={"Head","HumanoidRootPart"},
         Callback=function(v) S.silentAimPart=v end})
     secSilent:Toggle({Name="Wallbang",Default=false,Flag="SilentAimWallbang",
         Callback=function(v) S.silentAimWallbang=v end})
@@ -1612,14 +1648,16 @@ do
     secESP:Toggle({Name="Health Bar",    Default=false,Flag="ESPHealthBar",Callback=function(v) S.ESP_HPBAR=v    end})
     secESP:Toggle({Name="Distance",      Default=false,Flag="ESPDistance", Callback=function(v) S.ESP_DISTANCE=v end})
     secESP:Toggle({Name="Skeleton",      Default=false,Flag="ESPSkeleton", Callback=function(v) S.ESP_SKELETON=v end})
+    secESP:Toggle({Name="Player Name",   Default=false,Flag="ESPName",     Callback=function(v) S.ESP_NAME=v     end})
+    secESP:Toggle({Name="Held Item",     Default=false,Flag="ESPItem",     Callback=function(v) S.ESP_ITEM=v     end})
     secESP:Slider({Name="Max Distance",Min=50,Max=2000,Default=500,Suffix=" st",Callback=function(v) S.ESP_MAX_DIST=v end})
 
     local secESPOpt  = pageESP:Section({Name="Options",Side=2})
     local boxColorLbl = secESPOpt:Label("Box Color")
     boxColorLbl:Colorpicker({Name="BoxColor",Default=Color3.fromRGB(0,255,255),
         Callback=function(v) S.ESP_BOX_COLOR=v; if S.updateESPColor then S.updateESPColor(v) end end})
-    secESPOpt:Label("Shows: Box, Name, HP,")
-    secESPOpt:Label("Distance, Tool, Skeleton")
+    secESPOpt:Label("Independent toggles for Box, Name, HP,")
+    secESPOpt:Label("Distance, Item, Skeleton")
 
     -- Whitelist
     local secWL=pageWL:Section({Name="Whitelist",Side=1})
@@ -1642,9 +1680,9 @@ do
         updateWL(); pcall(function() wlDD.Items=wlPN end)
         if #wlPN>0 then selWL=wlPN[1] else selWL=nil end
     end})
-    secWL:Button({Name="Add",     Callback=function() if not selWL or selWL=="-" then return end; S.whitelist[selWL]=true;  updateWL(); wlLbl:Set("WL: "..getWLText()) end})
-    secWL:Button({Name="Remove",  Callback=function() if not selWL or selWL=="-" then return end; S.whitelist[selWL]=nil;   updateWL(); wlLbl:Set("WL: "..getWLText()) end})
-    secWL:Button({Name="Clear All",Callback=function() S.whitelist={}; updateWL(); wlLbl:Set("WL: None") end})
+    secWL:Button({Name="Add",     Callback=function() if not selWL or selWL=="-" then return end; S.whitelist[selWL]=true;  updateWL(); setLabel(wlLbl, "WL: "..getWLText()) end})
+    secWL:Button({Name="Remove",  Callback=function() if not selWL or selWL=="-" then return end; S.whitelist[selWL]=nil;   updateWL(); setLabel(wlLbl, "WL: "..getWLText()) end})
+    secWL:Button({Name="Clear All",Callback=function() S.whitelist={}; updateWL(); setLabel(wlLbl, "WL: None") end})
     Players.PlayerAdded:Connect(function(plr)
         task.spawn(function()
             local waited=0
@@ -1666,18 +1704,36 @@ do
     task.defer(function()
         Window:Init()
 
-        -- Inventory refresh
+        -- Inventory refresh loop (uses setLabel for reliability)
         task.spawn(function()
             while true do
                 task.wait(1)
                 S.markInvDirty()
                 pcall(function()
-                    waterLbl:Set("Water: "  ..S.countItem("Water"))
-                    gelLbl:Set("Gelatin: "  ..S.countItem("Gelatin"))
-                    sugLbl:Set("Sugar: "    ..S.countItem("Sugar Block Bag"))
-                    bagLbl:Set("Empty Bag: "..S.countItem("Empty Bag"))
-                    msBagLbl:Set("MS Bag: " ..S.countAllMS())
+                    setLabel(waterLbl, "Water: "  ..S.countItem("Water"))
+                    setLabel(gelLbl,   "Gelatin: "  ..S.countItem("Gelatin"))
+                    setLabel(sugLbl,   "Sugar: "    ..S.countItem("Sugar Block Bag"))
+                    setLabel(bagLbl,   "Empty Bag: "..S.countItem("Empty Bag"))
+                    setLabel(msBagLbl, "MS Bag: "   ..S.countAllMS())
                 end)
+            end
+        end)
+
+        -- Add keybinds to the KeybindList for toggles
+        local function addKeybind(name, key, callback)
+            pcall(function() KeybindList:AddKeybind(name, key, callback) end)
+        end
+        addKeybind("Toggle Aimbot", Enum.KeyCode.F1, function() S.aimOn = not S.aimOn end)
+        addKeybind("Toggle Silent Aim", Enum.KeyCode.F2, function() S.silentAim = not S.silentAim end)
+        addKeybind("Toggle ESP Box", Enum.KeyCode.F3, function() S.ESP_BOX = not S.ESP_BOX end)
+        addKeybind("Toggle Vehicle Fly", Enum.KeyCode.F4, function() S.vFlyOn = not S.vFlyOn; if S.vFlyOn then S.vFlyStart() else S.vFlyStop() end end)
+        addKeybind("Toggle Cooking", Enum.KeyCode.F5, function()
+            if S.isRunning then
+                S.isRunning = false
+            else
+                S.isRunning = true
+                S.setStatusDirect("STARTING", nil)
+                task.spawn(S.autoMSLoop)
             end
         end)
 
